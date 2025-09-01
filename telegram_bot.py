@@ -112,30 +112,31 @@ def get_user_answered_questions(telegram_id: int):
         return []
 
 def fetch_random_question(telegram_id: int = None):
-    """جلب سؤال عشوائي من قاعدة البيانات (غير مجاب عليه من قبل المستخدم)"""
+    """جلب أحدث سؤال من قاعدة البيانات (غير مجاب عليه من قبل المستخدم)"""
     try:
         # إذا كان هناك معرف مستخدم، نستثني الأسئلة المجاب عليها
         if telegram_id:
             answered_questions = get_user_answered_questions(telegram_id)
             
-            # استعلام لجلب سؤال عشوائي غير مجاب عليه
+            # استعلام لجلب أحدث سؤال غير مجاب عليه
             if answered_questions:
                 response = supabase.table('questions').select(
-                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation'
-                ).not_.in_('id', answered_questions).limit(1).execute()
+                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+                ).not_.in_('id', answered_questions).order('date_added', desc=True).limit(1).execute()
             else:
-                # المستخدم لم يجب على أي سؤال بعد
+                # المستخدم لم يجب على أي سؤال بعد - جلب أحدث سؤال
                 response = supabase.table('questions').select(
-                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation'
-                ).limit(1).execute()
+                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+                ).order('date_added', desc=True).limit(1).execute()
         else:
-            # بدون معرف مستخدم - جلب أي سؤال
+            # بدون معرف مستخدم - جلب أحدث سؤال
             response = supabase.table('questions').select(
-                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation'
-            ).limit(1).execute()
+                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+            ).order('date_added', desc=True).limit(1).execute()
         
         if response.data and len(response.data) > 0:
             question = response.data[0]
+            print(f"📅 Question {question.get('id')} from date: {question.get('date_added')}")
             return question
         else:
             if telegram_id and answered_questions:
@@ -147,6 +148,24 @@ def fetch_random_question(telegram_id: int = None):
     except Exception as e:
         print(f"⚠️ Warning: Could not fetch question: {e}")
         return None
+
+def get_latest_questions(limit: int = 10):
+    """جلب أحدث الأسئلة من قاعدة البيانات"""
+    try:
+        response = supabase.table('questions').select(
+            'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+        ).order('date_added', desc=True).limit(limit).execute()
+        
+        if response.data:
+            print(f"📅 Fetched {len(response.data)} latest questions")
+            return response.data
+        else:
+            print("⚠️ No questions found")
+            return []
+            
+    except Exception as e:
+        print(f"⚠️ Warning: Could not fetch latest questions: {e}")
+        return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بداية التفاعل مع البوت"""
@@ -197,15 +216,69 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if success:
         # إزالة لوحة المفاتيح
         await update.message.reply_text(
-            "Thank you! Your information has been saved.\n"
-            "شكراً لك! تم حفظ معلوماتك.",
+            "تم حفظ معلوماتك بنجاح.\n"
+            "Your information has been saved successfully.",
             reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
         )
         
-        # عرض قائمة الاختبار
-        await show_quiz_menu(update, context)
+        # عرض مقدمة البوت مباشرة
+        await show_bot_introduction(update, context)
     else:
         await update.message.reply_text("Sorry, there was an error saving your information. Please try again.")
+
+async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض مقدمة البوت للمستخدمين الجدد"""
+    user = update.effective_user
+    telegram_id = user.id
+    
+    # تحديث آخر تفاعل
+    update_last_interaction(telegram_id)
+    
+    intro_message = (
+        "🎯 **مرحباً بك في بوت الأسئلة الطبية!**\n"
+        "**Welcome to the Medical Questions Bot!**\n\n"
+        
+        "📚 **ما هو هذا البوت؟**\n"
+        "**What is this bot?**\n"
+        "بوت تفاعلي يساعدك على اختبار معرفتك الطبية من خلال أسئلة متعددة الخيارات.\n"
+        "An interactive bot that helps you test your medical knowledge through multiple choice questions.\n\n"
+        
+        "🚀 **كيف يعمل؟**\n"
+        "**How does it work?**\n"
+        "• ستحصل على أسئلة طبية عشوائية\n"
+        "• اختر الإجابة الصحيحة من 4 خيارات\n"
+        "• احصل على شرح فوري لكل سؤال\n"
+        "• تتبع تقدمك وإحصائياتك\n\n"
+        
+        "• You'll get random medical questions\n"
+        "• Choose the correct answer from 4 options\n"
+        "• Get instant explanations for each question\n"
+        "• Track your progress and statistics\n\n"
+        
+        "💡 **مميزات البوت:**\n"
+        "**Bot Features:**\n"
+        "✅ أسئلة متنوعة ومحدثة\n"
+        "✅ شرح مفصل لكل إجابة\n"
+        "✅ إحصائيات شخصية\n"
+        "✅ لا تكرار للأسئلة\n\n"
+        
+        "✅ Diverse and updated questions\n"
+        "✅ Detailed explanations\n"
+        "✅ Personal statistics\n"
+        "✅ No question repetition\n\n"
+        
+        "🎉 **هل أنت مستعد للبدء؟**\n"
+        "**Are you ready to start?**"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🚀 Start Quiz / بدء الاختبار", callback_data="quiz")],
+        [InlineKeyboardButton("📊 My Stats / إحصائياتي", callback_data="stats")],
+        [InlineKeyboardButton("ℹ️ About / حول البوت", callback_data="about")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(intro_message, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض قائمة الاختبار"""
@@ -222,16 +295,16 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     welcome_message = (
-        "Welcome back to the Medical Questions Bot!\n"
-        "مرحباً بك مرة أخرى في بوت الأسئلة الطبية!\n\n"
-        "Press the button below to start answering questions.\n"
-        "اضغط على الزر أدناه لبدء الإجابة على الأسئلة."
+        "🎯 **مرحباً بك مرة أخرى في بوت الأسئلة الطبية!**\n"
+        "**Welcome back to the Medical Questions Bot!**\n\n"
+        "🚀 **اختر ما تريد القيام به:**\n"
+        "**Choose what you want to do:**"
     )
     
     if hasattr(update, 'callback_query'):
-        await update.callback_query.edit_message_text(welcome_message, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
     else:
-        await update.message.reply_text(welcome_message, reply_markup=reply_markup)
+        await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض إحصائيات المستخدم"""
@@ -257,7 +330,68 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Back to Menu / العودة للقائمة", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(stats_message, reply_markup=reply_markup)
+            await query.edit_message_text(stats_message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض معلومات حول البوت"""
+    query = update.callback_query
+    await query.answer()
+    
+    about_message = (
+        "ℹ️ **حول البوت / About the Bot**\n\n"
+        
+        "🏥 **الغرض:**\n"
+        "**Purpose:**\n"
+        "بوت تعليمي يهدف إلى مساعدة الطلاب والمهنيين الطبيين على اختبار معرفتهم الطبية.\n"
+        "An educational bot designed to help medical students and professionals test their medical knowledge.\n\n"
+        
+        "🎓 **الفئة المستهدفة:**\n"
+        "**Target Audience:**\n"
+        "• طلاب الطب والتمريض\n"
+        "• المهنيون الطبيون\n"
+        "• أي شخص مهتم بالمعرفة الطبية\n\n"
+        
+        "• Medical and nursing students\n"
+        "• Medical professionals\n"
+        "• Anyone interested in medical knowledge\n\n"
+        
+        "🔬 **المحتوى:**\n"
+        "**Content:**\n"
+        "أسئلة طبية متنوعة تغطي مختلف التخصصات والمستويات.\n"
+        "Diverse medical questions covering various specialties and levels.\n\n"
+        
+        "📱 **كيفية الاستخدام:**\n"
+        "**How to Use:**\n"
+        "1. اضغط على 'بدء الاختبار'\n"
+        "2. اقرأ السؤال بعناية\n"
+        "3. اختر الإجابة الصحيحة\n"
+        "4. اقرأ الشرح\n"
+        "5. انتقل للسؤال التالي\n\n"
+        
+        "1. Click 'Start Quiz'\n"
+        "2. Read the question carefully\n"
+        "3. Choose the correct answer\n"
+        "4. Read the explanation\n"
+        "5. Move to next question\n\n"
+        
+        "🌟 **مميزات خاصة:**\n"
+        "**Special Features:**\n"
+        "• لا تكرار للأسئلة\n"
+        "• إحصائيات شخصية\n"
+        "• تتبع التقدم\n"
+        "• واجهة ثنائية اللغة\n\n"
+        
+        "• No question repetition\n"
+        "• Personal statistics\n"
+        "• Progress tracking\n"
+        "• Bilingual interface"
+    )
+    
+    # أزرار العودة
+    keyboard = [[InlineKeyboardButton("Back to Menu / العودة للقائمة", callback_data="menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(about_message, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال سؤال للمستخدم"""
@@ -290,8 +424,10 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # تنسيق السؤال - استخدام البيانات الأساسية فقط
     question_text = (
-        f"Q: {question_data.get('question', 'No question')}\n\n"
-        "Options / الخيارات:"
+        f"📚 **Question / السؤال:**\n"
+        f"{question_data.get('question', 'No question')}\n\n"
+        "📅 **Added:** {question_data.get('date_added', 'Unknown')}\n\n"
+        "**Options / الخيارات:**"
     )
     
     # إنشاء أزرار الخيارات - بدون ترجمة
@@ -310,7 +446,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(question_text, reply_markup=reply_markup)
+    await query.edit_message_text(question_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة إجابة المستخدم"""
