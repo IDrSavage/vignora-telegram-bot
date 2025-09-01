@@ -40,6 +40,9 @@ except Exception as e:
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
 
+# متغير عام للتطبيق (مطلوب للويبهوك)
+application = None
+
 def format_timestamp(timestamp):
     """تحويل Unix timestamp إلى تاريخ مفهوم"""
     try:
@@ -1140,6 +1143,10 @@ def webhook():
 async def process_update(update_data):
     """Process Telegram update asynchronously"""
     try:
+        if application is None:
+            logging.error("Application is not initialized yet.")
+            return
+        
         # Create update object
         update = Update.de_json(update_data, application.bot)
         
@@ -1155,6 +1162,8 @@ def run_flask():
 
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
+    global application
+    
     print("🚀 Starting Medical Questions Bot...")
     print(f"📡 Supabase URL: {SUPABASE_URL}")
     print(f"🤖 Telegram Token: {TELEGRAM_TOKEN[:20]}...")
@@ -1193,14 +1202,8 @@ def main():
     # Check if running on Cloud Run
     if os.environ.get('PORT'):
         print("🌐 Running on Cloud Run - Starting Flask server...")
-        # Set webhook URL
-        webhook_url = os.environ.get('WEBHOOK_URL')
-        if webhook_url:
-            try:
-                application.bot.set_webhook(url=f"{webhook_url}/webhook")
-                print(f"✅ Webhook set to: {webhook_url}/webhook")
-            except Exception as e:
-                print(f"⚠️ Warning: Could not set webhook: {e}")
+        # Note: Webhook will be set by deploy.sh script after deployment
+        print("📝 Note: Webhook will be configured by deployment script")
         
         # Run Flask app
         run_flask()

@@ -50,7 +50,3 @@ Thumbs.db
 .gcloud/
 *.key
 *.json
-
-# Deployment
-deploy.sh
-cloudbuild.yaml
