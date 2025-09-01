@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from supabase import create_client, Client
@@ -22,6 +23,21 @@ if not SUPABASE_KEY:
 
 # إنشاء عميل Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
+SHOW_DATE_ADDED = False
+
+def format_timestamp(timestamp):
+    """تحويل Unix timestamp إلى تاريخ مفهوم"""
+    try:
+        if timestamp:
+            # تحويل Unix timestamp إلى datetime
+            dt = datetime.fromtimestamp(int(timestamp))
+            # تنسيق التاريخ باللغة العربية والإنجليزية
+            return dt.strftime("%Y-%m-%d %H:%M")
+        return "Unknown"
+    except (ValueError, TypeError, OSError):
+        return "Unknown"
 
 def check_user_exists(telegram_id: int):
     """التحقق من وجود المستخدم في قاعدة البيانات"""
@@ -183,8 +199,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
         
         welcome_message = (
-            "Welcome to the Medical Questions Bot!\n"
-            "مرحباً بك في بوت الأسئلة الطبية!\n\n"
+            "Welcome to Vignora Medical Questions Bot!\n"
+            "مرحباً بك في بوت فيجنورا للأسئلة الطبية!\n\n"
+            "🦷 **Available Now:** Dentistry Questions\n"
+            "🦷 **متوفر الآن:** أسئلة طب الأسنان\n\n"
+            "🌟 More medical specialties coming soon!\n"
+            "🌟 المزيد من التخصصات الطبية قريباً!\n\n"
             "To get started, please share your phone number.\n"
             "للبدء، يرجى مشاركة رقم جوالك."
         )
@@ -235,13 +255,18 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
     update_last_interaction(telegram_id)
     
     intro_message = (
-        "🎯 **مرحباً بك في بوت الأسئلة الطبية!**\n"
-        "**Welcome to the Medical Questions Bot!**\n\n"
+        "🎯 **مرحباً بك في بوت فيجنورا للأسئلة الطبية!**\n"
+        "**Welcome to Vignora Medical Questions Bot!**\n\n"
         
-        "📚 **ما هو هذا البوت؟**\n"
-        "**What is this bot?**\n"
-        "بوت تفاعلي يساعدك على اختبار معرفتك الطبية من خلال أسئلة متعددة الخيارات.\n"
-        "An interactive bot that helps you test your medical knowledge through multiple choice questions.\n\n"
+        "📚 **ما هو بوت فيجنورا؟**\n"
+        "**What is Vignora Bot?**\n"
+        "بوت تفاعلي متطور يساعدك على اختبار معرفتك الطبية من خلال أسئلة متعددة الخيارات.\n"
+        "An advanced interactive bot that helps you test your medical knowledge through multiple choice questions.\n\n"
+        
+        "🦷 **متوفر الآن:**\n"
+        "**Available Now:**\n"
+        "• أسئلة طب الأسنان\n"
+        "• Dentistry Questions\n\n"
         
         "🚀 **كيف يعمل؟**\n"
         "**How does it work?**\n"
@@ -255,20 +280,27 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
         "• Get instant explanations for each question\n"
         "• Track your progress and statistics\n\n"
         
-        "💡 **مميزات البوت:**\n"
-        "**Bot Features:**\n"
+        "💡 **مميزات بوت فيجنورا:**\n"
+        "**Vignora Bot Features:**\n"
         "✅ أسئلة متنوعة ومحدثة\n"
         "✅ شرح مفصل لكل إجابة\n"
         "✅ إحصائيات شخصية\n"
-        "✅ لا تكرار للأسئلة\n\n"
+        "✅ لا تكرار للأسئلة\n"
+        "✅ واجهة ثنائية اللغة\n\n"
         
         "✅ Diverse and updated questions\n"
         "✅ Detailed explanations\n"
         "✅ Personal statistics\n"
-        "✅ No question repetition\n\n"
+        "✅ No question repetition\n"
+        "✅ Bilingual interface\n\n"
         
-        "🎉 **هل أنت مستعد للبدء؟**\n"
-        "**Are you ready to start?**"
+        "🌟 **خطة التطوير:**\n"
+        "**Development Plan:**\n"
+        "سيتم إضافة باقي التخصصات الطبية قريباً لتغطية جميع احتياجاتكم التعليمية.\n"
+        "Other medical specialties will be added soon to cover all your educational needs.\n\n"
+        
+        "🎉 **هل أنت مستعد للبدء مع فيجنورا؟**\n"
+        "**Are you ready to start with Vignora?**"
     )
     
     keyboard = [
@@ -295,13 +327,17 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     welcome_message = (
-        "🎯 **مرحباً بك مرة أخرى في بوت الأسئلة الطبية!**\n"
-        "**Welcome back to the Medical Questions Bot!**\n\n"
+        "🎯 **مرحباً بك مرة أخرى في بوت فيجنورا للأسئلة الطبية!**\n"
+        "**Welcome back to Vignora Medical Questions Bot!**\n\n"
+        "🦷 **متوفر الآن:** أسئلة طب الأسنان\n"
+        "🦷 **Available Now:** Dentistry Questions\n\n"
+        "🌟 **خطة التطوير:** سيتم إضافة باقي التخصصات الطبية قريباً\n"
+        "**Development Plan:** Other medical specialties will be added soon\n\n"
         "🚀 **اختر ما تريد القيام به:**\n"
         "**Choose what you want to do:**"
     )
     
-    if hasattr(update, 'callback_query'):
+    if hasattr(update, 'callback_query') and update.callback_query:
         await update.callback_query.edit_message_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
     else:
         await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
@@ -326,11 +362,39 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"استمر! 🚀"
     )
     
-    # أزرار العودة
+        # أزرار العودة
     keyboard = [[InlineKeyboardButton("Back to Menu / العودة للقائمة", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-            await query.edit_message_text(stats_message, reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text(stats_message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def end_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إنهاء جلسة الاختبار والعودة للقائمة الرئيسية"""
+    query = update.callback_query
+    await query.answer()
+    
+    # مسح بيانات السؤال الحالي
+    if "current_question" in context.user_data:
+        del context.user_data["current_question"]
+    
+    # عرض رسالة إنهاء الجلسة
+    end_message = (
+        "🔚 **تم إنهاء الجلسة**\n"
+        "**Session Ended**\n\n"
+        "شكراً لك على المشاركة في الاختبار!\n"
+        "Thank you for participating in the quiz!\n\n"
+        "يمكنك العودة للقائمة الرئيسية أو بدء جلسة جديدة.\n"
+        "You can return to the main menu or start a new session."
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🚀 Start New Quiz / بدء اختبار جديد", callback_data="quiz")],
+        [InlineKeyboardButton("📊 My Stats / إحصائياتي", callback_data="stats")],
+        [InlineKeyboardButton("🏠 Main Menu / القائمة الرئيسية", callback_data="menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(end_message, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض معلومات حول البوت"""
@@ -338,27 +402,32 @@ async def show_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     about_message = (
-        "ℹ️ **حول البوت / About the Bot**\n\n"
+        "ℹ️ **حول بوت فيجنورا / About Vignora Bot**\n\n"
         
         "🏥 **الغرض:**\n"
         "**Purpose:**\n"
-        "بوت تعليمي يهدف إلى مساعدة الطلاب والمهنيين الطبيين على اختبار معرفتهم الطبية.\n"
-        "An educational bot designed to help medical students and professionals test their medical knowledge.\n\n"
+        "بوت تعليمي متطور يهدف إلى مساعدة الطلاب والمهنيين الطبيين على اختبار معرفتهم الطبية.\n"
+        "An advanced educational bot designed to help medical students and professionals test their medical knowledge.\n\n"
         
         "🎓 **الفئة المستهدفة:**\n"
         "**Target Audience:**\n"
-        "• طلاب الطب والتمريض\n"
+        "• طلاب طب الأسنان\n"
         "• المهنيون الطبيون\n"
         "• أي شخص مهتم بالمعرفة الطبية\n\n"
         
-        "• Medical and nursing students\n"
+        "• Dental students\n"
         "• Medical professionals\n"
         "• Anyone interested in medical knowledge\n\n"
         
-        "🔬 **المحتوى:**\n"
-        "**Content:**\n"
-        "أسئلة طبية متنوعة تغطي مختلف التخصصات والمستويات.\n"
-        "Diverse medical questions covering various specialties and levels.\n\n"
+        "🦷 **المحتوى المتوفر الآن:**\n"
+        "**Currently Available:**\n"
+        "أسئلة طب الأسنان متنوعة تغطي مختلف المستويات.\n"
+        "Diverse dentistry questions covering various levels.\n\n"
+        
+        "🚀 **خطة التطوير:**\n"
+        "**Development Plan:**\n"
+        "سيتم إضافة باقي التخصصات الطبية قريباً لتغطية جميع احتياجاتك التعليمية.\n"
+        "Other medical specialties will be added soon to cover all your educational needs.\n\n"
         
         "📱 **كيفية الاستخدام:**\n"
         "**How to Use:**\n"
@@ -374,17 +443,19 @@ async def show_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "4. Read the explanation\n"
         "5. Move to next question\n\n"
         
-        "🌟 **مميزات خاصة:**\n"
-        "**Special Features:**\n"
+        "🌟 **مميزات بوت فيجنورا:**\n"
+        "**Vignora Bot Features:**\n"
         "• لا تكرار للأسئلة\n"
         "• إحصائيات شخصية\n"
         "• تتبع التقدم\n"
-        "• واجهة ثنائية اللغة\n\n"
+        "• واجهة ثنائية اللغة\n"
+        "• تطوير مستمر ومحتوى محدث\n\n"
         
         "• No question repetition\n"
         "• Personal statistics\n"
         "• Progress tracking\n"
-        "• Bilingual interface"
+        "• Bilingual interface\n"
+        "• Continuous development and updated content"
     )
     
     # أزرار العودة
@@ -426,7 +497,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question_text = (
         f"📚 **Question / السؤال:**\n"
         f"{question_data.get('question', 'No question')}\n\n"
-        "📅 **Added:** {question_data.get('date_added', 'Unknown')}\n\n"
+        f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\\n\\n' if SHOW_DATE_ADDED else ''}"
         "**Options / الخيارات:**"
     )
     
@@ -435,7 +506,8 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"A: {question_data.get('option_a', '')}", callback_data="answer_A")],
         [InlineKeyboardButton(f"B: {question_data.get('option_b', '')}", callback_data="answer_B")],
         [InlineKeyboardButton(f"C: {question_data.get('option_c', '')}", callback_data="answer_C")],
-        [InlineKeyboardButton(f"D: {question_data.get('option_d', '')}", callback_data="answer_D")]
+        [InlineKeyboardButton(f"D: {question_data.get('option_d', '')}", callback_data="answer_D")],
+        [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
     ]
     
     # حفظ بيانات السؤال في سياق المستخدم
@@ -485,8 +557,11 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         result_message += "No explanation available / لا يوجد شرح متاح"
     
-    # أزرار التحكم - زر التالي فقط
-    keyboard = [[InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")]]
+    # أزرار التحكم - زر التالي وزر إنهاء الجلسة
+    keyboard = [
+        [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
+        [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(result_message, reply_markup=reply_markup)
@@ -507,6 +582,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
     application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
+    application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
     
     # تشغيل البوت
     print("✅ Bot is running and ready to receive messages!")
