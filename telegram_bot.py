@@ -1,9 +1,13 @@
 import os
+import asyncio
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import logging
+from flask import Flask, request, jsonify
+import threading
 
 # تحميل متغيرات البيئة
 load_dotenv()
@@ -1094,6 +1098,61 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # المستخدم غير مشترك
         await show_subscription_required(update, context, is_new_user=False)
 
+# Flask app for Cloud Run
+app = Flask(__name__)
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Cloud Run"""
+    return jsonify({
+        'status': 'healthy',
+        'bot': 'Vignora Medical Questions Bot',
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+@app.route('/', methods=['GET'])
+def home():
+    """Home endpoint"""
+    return jsonify({
+        'message': 'Vignora Medical Questions Bot is running!',
+        'status': 'active',
+        'endpoints': {
+            'health': '/health',
+            'webhook': '/webhook'
+        }
+    }), 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Webhook endpoint for Telegram updates"""
+    try:
+        # Get the update from Telegram
+        update_data = request.get_json()
+        
+        # Process the update asynchronously
+        asyncio.run(process_update(update_data))
+        
+        return jsonify({'status': 'ok'}), 200
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+async def process_update(update_data):
+    """Process Telegram update asynchronously"""
+    try:
+        # Create update object
+        update = Update.de_json(update_data, application.bot)
+        
+        # Process the update
+        await application.process_update(update)
+    except Exception as e:
+        logging.error(f"Error processing update: {e}")
+
+def run_flask():
+    """Run Flask app"""
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
     print("🚀 Starting Medical Questions Bot...")
@@ -1130,7 +1189,24 @@ def main():
     # تشغيل البوت
     print("✅ Bot is running and ready to receive messages!")
     print("📱 Users can now start the bot with /start")
-    application.run_polling()
+    
+    # Check if running on Cloud Run
+    if os.environ.get('PORT'):
+        print("🌐 Running on Cloud Run - Starting Flask server...")
+        # Set webhook URL
+        webhook_url = os.environ.get('WEBHOOK_URL')
+        if webhook_url:
+            try:
+                application.bot.set_webhook(url=f"{webhook_url}/webhook")
+                print(f"✅ Webhook set to: {webhook_url}/webhook")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not set webhook: {e}")
+        
+        # Run Flask app
+        run_flask()
+    else:
+        print("🔄 Running locally - Using polling mode...")
+        application.run_polling()
 
 if __name__ == "__main__":
     main()

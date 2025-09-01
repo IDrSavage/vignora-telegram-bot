@@ -45,3 +45,12 @@ Thumbs.db
 
 # Telegram Bot Token (for security)
 # Don't commit actual tokens to public repositories
+
+# Google Cloud
+.gcloud/
+*.key
+*.json
+
+# Deployment
+deploy.sh
+cloudbuild.yaml
