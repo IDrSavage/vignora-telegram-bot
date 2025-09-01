@@ -12,6 +12,9 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Vignora")
+TELEGRAM_CHANNEL_LINK = os.getenv("TELEGRAM_CHANNEL_LINK", "https://t.me/Vignora")
+CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "true").lower() == "true"
 
 # التحقق من وجود المتغيرات المطلوبة
 if not TELEGRAM_TOKEN:
@@ -22,7 +25,13 @@ if not SUPABASE_KEY:
     raise ValueError("SUPABASE_KEY is required in .env file")
 
 # إنشاء عميل Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("✅ Supabase client created successfully")
+except Exception as e:
+    print(f"⚠️ Warning: Could not create Supabase client: {e}")
+    print("⚠️ Bot will run with limited functionality")
+    supabase = None
 
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
@@ -73,6 +82,9 @@ def save_user_data(telegram_id: int, username: str, first_name: str, last_name: 
 
 def update_last_interaction(telegram_id: int):
     """تحديث آخر تفاعل للمستخدم"""
+    if not supabase:
+        return
+    
     try:
         supabase.table('target_users').update({'last_interaction': 'now()'}).eq('telegram_id', telegram_id).execute()
     except Exception as e:
@@ -101,16 +113,18 @@ def save_user_answer(telegram_id: int, question_id: int, selected_answer: str, c
 def get_user_stats(telegram_id: int):
     """جلب إحصائيات المستخدم"""
     try:
-        response = supabase.table('user_answers_bot').select('is_correct').eq('user_id', telegram_id).execute()
+        response = supabase.table('user_answers_bot').select('is_correct', count='exact').eq('user_id', telegram_id).execute()
         if response.data:
             total_answers = len(response.data)
             correct_answers = sum(1 for answer in response.data if answer['is_correct'])
             accuracy = (correct_answers / total_answers) * 100 if total_answers > 0 else 0
+            print(f"✅ User {telegram_id} stats: {total_answers} total, {correct_answers} correct, {accuracy}% accuracy")
             return {
                 'total_answers': total_answers,
                 'correct_answers': correct_answers,
                 'accuracy': round(accuracy, 1)
             }
+        print(f"✅ User {telegram_id} has no stats yet")
         return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
     except Exception as e:
         print(f"⚠️ Warning: Could not fetch user stats: {e}")
@@ -119,13 +133,37 @@ def get_user_stats(telegram_id: int):
 def get_user_answered_questions(telegram_id: int):
     """جلب الأسئلة التي أجاب عليها المستخدم"""
     try:
-        response = supabase.table('user_answers_bot').select('question_id').eq('user_id', telegram_id).execute()
+        # محاولة استخدام count للحصول على جميع الأسئلة
+        response = supabase.table('user_answers_bot').select('question_id', count='exact').eq('user_id', telegram_id).execute()
         if response.data:
+            count = len(response.data)
+            print(f"✅ User {telegram_id} answered {count} questions")
             return [answer['question_id'] for answer in response.data]
+        print(f"✅ User {telegram_id} answered 0 questions")
         return []
     except Exception as e:
         print(f"⚠️ Warning: Could not fetch user answers: {e}")
         return []
+
+def get_total_questions_count():
+    """جلب عدد الأسئلة الكلي في قاعدة البيانات"""
+    try:
+        # محاولة استخدام count
+        response = supabase.table('questions').select('*', count='exact').execute()
+        if hasattr(response, 'count') and response.count is not None:
+            print(f"✅ Got exact count: {response.count}")
+            return response.count
+        
+        # إذا فشل count، نجرب طريقة أخرى
+        print("⚠️ Count method failed, trying alternative...")
+        response = supabase.table('questions').select('id').execute()
+        count = len(response.data)
+        print(f"✅ Got count from data length: {count}")
+        return count
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not get total questions count: {e}")
+        return 0
 
 def fetch_random_question(telegram_id: int = None):
     """جلب أحدث سؤال من قاعدة البيانات (غير مجاب عليه من قبل المستخدم)"""
@@ -133,9 +171,11 @@ def fetch_random_question(telegram_id: int = None):
         # إذا كان هناك معرف مستخدم، نستثني الأسئلة المجاب عليها
         if telegram_id:
             answered_questions = get_user_answered_questions(telegram_id)
+            print(f"📊 User {telegram_id} has answered {len(answered_questions)} questions")
             
             # استعلام لجلب أحدث سؤال غير مجاب عليه
             if answered_questions:
+                # استخدام not in مع limit للحصول على سؤال عشوائي
                 response = supabase.table('questions').select(
                     'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
                 ).not_.in_('id', answered_questions).order('date_added', desc=True).limit(1).execute()
@@ -254,6 +294,9 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
     # تحديث آخر تفاعل
     update_last_interaction(telegram_id)
     
+    # جلب عدد الأسئلة المتاحة
+    total_questions = get_total_questions_count()
+    
     intro_message = (
         "🎯 **مرحباً بك في بوت فيجنورا للأسئلة الطبية!**\n"
         "**Welcome to Vignora Medical Questions Bot!**\n\n"
@@ -267,6 +310,8 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
         "**Available Now:**\n"
         "• أسئلة طب الأسنان\n"
         "• Dentistry Questions\n\n"
+        
+        f"📊 **Questions Available:** {total_questions}\n\n"
         
         "🚀 **كيف يعمل؟**\n"
         "**How does it work?**\n"
@@ -320,6 +365,16 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تحديث آخر تفاعل
     update_last_interaction(telegram_id)
     
+    # التحقق من الاشتراك في القناة
+    if CHANNEL_SUBSCRIPTION_REQUIRED:
+        is_subscribed = await check_channel_subscription(telegram_id, context.bot)
+        if not is_subscribed:
+            await show_subscription_required(update, context, is_new_user=False)
+            return
+    
+    # جلب عدد الأسئلة المتاحة
+    total_questions = get_total_questions_count()
+    
     keyboard = [
         [InlineKeyboardButton("Start Quiz / بدء الاختبار", callback_data="quiz")],
         [InlineKeyboardButton("My Stats / إحصائياتي", callback_data="stats")],
@@ -331,6 +386,7 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "**Welcome back to Vignora Medical Questions Bot!**\n\n"
         "🦷 **متوفر الآن:** أسئلة طب الأسنان\n"
         "🦷 **Available Now:** Dentistry Questions\n\n"
+        f"📊 **Questions Available:** {total_questions}\n\n"
         "🌟 **خطة التطوير:** سيتم إضافة باقي التخصصات الطبية قريباً\n"
         "**Development Plan:** Other medical specialties will be added soon\n\n"
         "🚀 **اختر ما تريد القيام به:**\n"
@@ -348,16 +404,29 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user = query.from_user
+    update_last_interaction(user.id)
+    
+    # التحقق من الاشتراك في القناة
+    if CHANNEL_SUBSCRIPTION_REQUIRED:
+        is_subscribed = await check_channel_subscription(user.id, context.bot)
+        if not is_subscribed:
+            await show_subscription_required(update, context, is_new_user=False)
+            return
+    
     stats = get_user_stats(user.id)
     
+    # جلب عدد الأسئلة الكلي والمتبقية
+    total_questions = get_total_questions_count()
+    answered_questions = get_user_answered_questions(user.id)
+    remaining_questions = total_questions - len(answered_questions)
+    
     stats_message = (
-        f"📊 Your Statistics / إحصائياتك\n\n"
-        f"Total Questions: {stats['total_answers']}\n"
-        f"إجمالي الأسئلة: {stats['total_answers']}\n\n"
-        f"Correct Answers: {stats['correct_answers']}\n"
-        f"الإجابات الصحيحة: {stats['correct_answers']}\n\n"
-        f"Accuracy: {stats['accuracy']}%\n"
-        f"الدقة: {stats['accuracy']}%\n\n"
+        f"📊 **Your Statistics / إحصائياتك**\n\n"
+        f"**Answered:** {stats['total_answers']}\n"
+        f"**Correct:** {stats['correct_answers']}\n"
+        f"**Accuracy:** {stats['accuracy']}%\n\n"
+        f"📚 **Progress:** {stats['total_answers']} / {total_questions}\n"
+        f"📚 **Remaining:** {remaining_questions} / {total_questions}\n\n"
         f"Keep going! 🚀\n"
         f"استمر! 🚀"
     )
@@ -473,10 +542,29 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     update_last_interaction(user.id)
     
+    # التحقق من الاشتراك في القناة
+    if CHANNEL_SUBSCRIPTION_REQUIRED:
+        is_subscribed = await check_channel_subscription(user.id, context.bot)
+        if not is_subscribed:
+            await show_subscription_required(update, context, is_new_user=False)
+            return
+    
+    # جلب عدد الأسئلة المتاحة
+    total_questions = get_total_questions_count()
+    answered_questions = get_user_answered_questions(user.id)
+    remaining_questions = total_questions - len(answered_questions)
+    
+    # التحقق من حد 10 أسئلة للمستخدمين الجدد
+    if len(answered_questions) >= 10:
+        # التحقق من الاشتراك مرة أخرى
+        is_subscribed = await check_channel_subscription(user.id, context.bot)
+        if not is_subscribed:
+            await show_subscription_required(update, context, is_new_user=True)
+            return
+    
     question_data = fetch_random_question(user.id)
     if not question_data:
         # التحقق من سبب عدم وجود أسئلة
-        answered_questions = get_user_answered_questions(user.id)
         if answered_questions and len(answered_questions) > 0:
             await query.edit_message_text(
                 "🎉 مبروك! لقد أجبت على جميع الأسئلة المتاحة!\n"
@@ -493,10 +581,11 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
-    # تنسيق السؤال - استخدام البيانات الأساسية فقط
+    # تنسيق السؤال مع عدد الأسئلة المتبقية
     question_text = (
         f"📚 **Question / السؤال:**\n"
         f"{question_data.get('question', 'No question')}\n\n"
+        f"📊 **Remaining:** {remaining_questions} / {total_questions}\n\n"
         f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\\n\\n' if SHOW_DATE_ADDED else ''}"
         "**Options / الخيارات:**"
     )
@@ -515,6 +604,14 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "question_id": question_data.get('id', ''),
         "correct_answer": question_data.get('correct_answer', ''),
         "explanation": question_data.get('explanation', '')
+    }
+    
+    # حفظ بيانات السؤال الكاملة لعرض الإجابة الصحيحة
+    context.user_data["current_question_data"] = {
+        "option_a": question_data.get('option_a', ''),
+        "option_b": question_data.get('option_b', ''),
+        "option_c": question_data.get('option_c', ''),
+        "option_d": question_data.get('option_d', '')
     }
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -539,6 +636,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     explanation = context.user_data["current_question"]["explanation"]
     question_id = context.user_data["current_question"]["question_id"]
     
+    # حفظ الإجابة المختارة للعودة إليها
+    context.user_data["last_selected_answer"] = selected_answer
+    
     # تحديد ما إذا كانت الإجابة صحيحة
     is_correct = selected_answer == correct_answer
     
@@ -549,28 +649,464 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_correct:
         result_message = "✅ إجابة صحيحة!\nCorrect answer!\n\n"
     else:
-        result_message = f"❌ إجابة خاطئة\nWrong answer\nالإجابة الصحيحة / Correct answer: {correct_answer}\n\n"
+        # عرض الإجابة الصحيحة كاملة
+        correct_answer_text = ""
+        question_data = context.user_data.get("current_question_data", {})
+        if question_data:
+            if correct_answer == "A":
+                correct_answer_text = f"A: {question_data.get('option_a', '')}"
+            elif correct_answer == "B":
+                correct_answer_text = f"B: {question_data.get('option_b', '')}"
+            elif correct_answer == "C":
+                correct_answer_text = f"C: {question_data.get('option_c', '')}"
+            elif correct_answer == "D":
+                correct_answer_text = f"D: {question_data.get('option_d', '')}"
+        
+        result_message = (
+            f"❌ إجابة خاطئة\n"
+            f"Wrong answer\n\n"
+            f"**Correct Answer / الإجابة الصحيحة:**\n"
+            f"{correct_answer_text}\n\n"
+        )
     
     # إضافة الشرح المبسط فقط
     if explanation:
-        result_message += f"Explanation / الشرح:\n{explanation}"
+        result_message += f"**Explanation / الشرح:**\n{explanation}"
     else:
-        result_message += "No explanation available / لا يوجد شرح متاح"
+        result_message += "**No explanation available / لا يوجد شرح متاح**"
     
-    # أزرار التحكم - زر التالي وزر إنهاء الجلسة
+    # أزرار التحكم - زر التالي وزر إنهاء الجلسة وزر الإبلاغ
     keyboard = [
         [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
+        [InlineKeyboardButton("🚨 Report Question / الإبلاغ عن السؤال", callback_data="report")],
         [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(result_message, reply_markup=reply_markup)
+    await query.edit_message_text(result_message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة الإبلاغ عن السؤال"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    update_last_interaction(user.id)
+    
+    # التحقق من وجود بيانات السؤال
+    if "current_question" not in context.user_data:
+        await query.edit_message_text("عذراً، حدث خطأ. يرجى البدء من جديد.")
+        return
+    
+    question_id = context.user_data["current_question"]["question_id"]
+    
+    # عرض خيارات الإبلاغ
+    report_keyboard = [
+        [InlineKeyboardButton("❌ Incorrect Answer / إجابة خاطئة", callback_data=f"report_incorrect_{question_id}")],
+        [InlineKeyboardButton("📝 Typo or Grammar / خطأ إملائي أو نحوي", callback_data=f"report_typo_{question_id}")],
+        [InlineKeyboardButton("🔍 Unclear Question / سؤال غير واضح", callback_data=f"report_unclear_{question_id}")],
+        [InlineKeyboardButton("📚 Wrong Topic / موضوع خاطئ", callback_data=f"report_topic_{question_id}")],
+        [InlineKeyboardButton("🔙 Back / العودة", callback_data="back_to_answer")]
+    ]
+    
+    report_markup = InlineKeyboardMarkup(report_keyboard)
+    
+    report_message = (
+        "🚨 **Report Question / الإبلاغ عن السؤال**\n\n"
+        "Please select the reason for reporting:\n"
+        "يرجى اختيار سبب الإبلاغ:\n\n"
+        "Choose the most appropriate reason to help us improve the question quality.\n"
+        "اختر السبب الأكثر ملاءمة لمساعدتنا في تحسين جودة السؤال."
+    )
+    
+    await query.edit_message_text(report_message, reply_markup=report_markup, parse_mode='Markdown')
+
+async def handle_report_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة سبب الإبلاغ المحدد"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    update_last_interaction(user.id)
+    
+    # استخراج نوع البلاغ ومعرف السؤال
+    callback_data = query.data
+    parts = callback_data.split('_')
+    
+    if len(parts) < 3:
+        await query.edit_message_text("عذراً، حدث خطأ في معالجة البلاغ.")
+        return
+    
+    report_type = parts[1]
+    question_id = int(parts[2])
+    
+    # تحديد سبب البلاغ
+    report_reasons = {
+        'incorrect': 'Incorrect Answer / إجابة خاطئة',
+        'typo': 'Typo or Grammar / خطأ إملائي أو نحوي',
+        'unclear': 'Unclear Question / سؤال غير واضح',
+        'topic': 'Wrong Topic / موضوع خاطئ'
+    }
+    
+    report_reason = report_reasons.get(report_type, 'Other / أخرى')
+    
+    # حفظ البلاغ
+    success = report_question(user.id, question_id, report_reason)
+    
+    if success:
+        success_message = (
+            "✅ **Report Submitted / تم إرسال البلاغ**\n\n"
+            f"**Question ID:** {question_id}\n"
+            f"**Report Reason:** {report_reason}\n\n"
+            "Thank you for helping us improve the question quality!\n"
+            "شكراً لك لمساعدتنا في تحسين جودة السؤال!\n\n"
+            "We will review your report and take appropriate action.\n"
+            "سنراجع بلاغك ونتخذ الإجراء المناسب."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
+            [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(success_message, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        error_message = (
+            "❌ **Report Failed / فشل في إرسال البلاغ**\n\n"
+            "Sorry, there was an error submitting your report.\n"
+            "عذراً، حدث خطأ في إرسال البلاغ.\n\n"
+            "Please try again later.\n"
+            "يرجى المحاولة لاحقاً."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back / العودة", callback_data="back_to_answer")],
+            [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(error_message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def back_to_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """العودة إلى عرض الإجابة"""
+    query = update.callback_query
+    await query.answer()
+    
+    # إعادة عرض الإجابة مع الأزرار
+    if "current_question" in context.user_data:
+        # إعادة إنشاء رسالة النتيجة
+        selected_answer = context.user_data.get("last_selected_answer", "")
+        correct_answer = context.user_data["current_question"]["correct_answer"]
+        explanation = context.user_data["current_question"]["explanation"]
+        
+        # إنشاء رسالة النتيجة
+        if selected_answer == correct_answer:
+            result_message = "✅ إجابة صحيحة!\nCorrect answer!\n\n"
+        else:
+            # عرض الإجابة الصحيحة كاملة
+            correct_answer_text = ""
+            question_data = context.user_data.get("current_question_data", {})
+            if question_data:
+                if correct_answer == "A":
+                    correct_answer_text = f"A: {question_data.get('option_a', '')}"
+                elif correct_answer == "B":
+                    correct_answer_text = f"B: {question_data.get('option_b', '')}"
+                elif correct_answer == "C":
+                    correct_answer_text = f"C: {question_data.get('option_c', '')}"
+                elif correct_answer == "D":
+                    correct_answer_text = f"D: {question_data.get('option_d', '')}"
+            
+            result_message = (
+                f"❌ إجابة خاطئة\n"
+                f"Wrong answer\n\n"
+                f"**Correct Answer / الإجابة الصحيحة:**\n"
+                f"{correct_answer_text}\n\n"
+            )
+        
+        # إضافة الشرح
+        if explanation:
+            result_message += f"**Explanation / الشرح:**\n{explanation}"
+        else:
+            result_message += "**No explanation available / لا يوجد شرح متاح**"
+        
+        # أزرار التحكم
+        keyboard = [
+            [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
+            [InlineKeyboardButton("🚨 Report Question / الإبلاغ عن السؤال", callback_data="report")],
+            [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(result_message, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await query.edit_message_text("عذراً، لا يمكن العودة إلى الإجابة.")
+
+async def test_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختبار عدد الأسئلة الحقيقي"""
+    try:
+        # طريقة 1: استخدام count
+        count_response = supabase.table('questions').select('*', count='exact').execute()
+        count_method = count_response.count if hasattr(count_response, 'count') else 'Not available'
+        
+        # طريقة 2: جلب جميع الأسئلة
+        all_response = supabase.table('questions').select('id').execute()
+        all_method = len(all_response.data)
+        
+        # طريقة 3: جلب آخر 1000 سؤال
+        limit_response = supabase.table('questions').select('id').order('id', desc=True).limit(1000).execute()
+        limit_method = len(limit_response.data)
+        
+        test_message = (
+            "🧪 **Test Count Results / نتائج اختبار العدد:**\n\n"
+            f"📊 Count Method: {count_method}\n"
+            f"📊 All Method: {all_method}\n"
+            f"📊 Limit Method: {limit_method}\n\n"
+            "This helps debug the question count issue.\n"
+            "هذا يساعد في تشخيص مشكلة عدد الأسئلة."
+        )
+        
+        await update.message.reply_text(test_message, parse_mode='Markdown')
+        
+    except Exception as e:
+        error_message = f"❌ Error testing count: {e}"
+        await update.message.reply_text(error_message)
+
+async def db_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض معلومات قاعدة البيانات"""
+    try:
+        # معلومات الأسئلة
+        questions_count = get_total_questions_count()
+        
+        # معلومات المستخدمين
+        users_response = supabase.table('target_users').select('telegram_id', count='exact').execute()
+        users_count = users_response.count if hasattr(users_response, 'count') else len(users_response.data)
+        
+        # معلومات الإجابات
+        answers_response = supabase.table('user_answers_bot').select('id', count='exact').execute()
+        answers_count = answers_response.count if hasattr(answers_response, 'count') else len(answers_response.data)
+        
+        info_message = (
+            "🗄️ **Database Information / معلومات قاعدة البيانات:**\n\n"
+            f"📚 **Questions / الأسئلة:**\n"
+            f"Total Questions: {questions_count}\n"
+            f"إجمالي الأسئلة: {questions_count}\n\n"
+            f"👥 **Users / المستخدمين:**\n"
+            f"Total Users: {users_count}\n"
+            f"إجمالي المستخدمين: {users_count}\n\n"
+            f"✅ **Answers / الإجابات:**\n"
+            f"Total Answers: {answers_count}\n"
+            f"إجمالي الإجابات: {answers_count}\n\n"
+            "This shows the real numbers from your database.\n"
+            "هذا يعرض الأرقام الحقيقية من قاعدة البيانات."
+        )
+        
+        await update.message.reply_text(info_message, parse_mode='Markdown')
+        
+    except Exception as e:
+        error_message = f"❌ Error getting database info: {e}"
+        await update.message.reply_text(error_message)
+
+async def test_bot_permissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختبار صلاحيات البوت في القناة"""
+    try:
+        channel_id = TELEGRAM_CHANNEL_ID.lstrip('@')
+        
+        # محاولة الحصول على معلومات القناة
+        chat_info = await context.bot.get_chat(f"@{channel_id}")
+        
+        # محاولة الحصول على معلومات البوت في القناة
+        bot_member = await context.bot.get_chat_member(f"@{channel_id}", context.bot.id)
+        
+        # محاولة الحصول على قائمة الأعضاء (اختبار الصلاحيات)
+        try:
+            # محاولة جلب عضو واحد للاختبار
+            test_member = await context.bot.get_chat_member(f"@{channel_id}", context.bot.id)
+            members_accessible = True
+        except Exception as e:
+            members_accessible = False
+            members_error = str(e)
+        
+        # إنشاء رسالة التقرير
+        report_message = (
+            "🔧 **Bot Permissions Test / اختبار صلاحيات البوت**\n\n"
+            f"📢 **Channel Info:**\n"
+            f"**Name:** {chat_info.title}\n"
+            f"**Username:** @{chat_info.username}\n"
+            f"**Type:** {chat_info.type}\n\n"
+            f"🤖 **Bot Status:**\n"
+            f"**Role:** {bot_member.status}\n"
+            f"**Can Access Members:** {'✅ Yes' if members_accessible else '❌ No'}\n\n"
+        )
+        
+        if not members_accessible:
+            report_message += (
+                f"❌ **Members Access Error:**\n"
+                f"{members_error}\n\n"
+                "🔧 **Required Actions:**\n"
+                "1. Make bot admin in channel\n"
+                "2. Enable 'Add Members' permission\n"
+                "3. Ensure bot has 'Invite Users' right\n\n"
+                "🔧 **الإجراءات المطلوبة:**\n"
+                "1. اجعل البوت مدير في القناة\n"
+                "2. فعّل صلاحية 'إضافة أعضاء'\n"
+                "3. تأكد من أن البوت لديه حق 'دعوة مستخدمين'"
+            )
+        else:
+            report_message += (
+                "✅ **All Permissions OK!**\n"
+                "The bot can check channel subscriptions.\n\n"
+                "✅ **جميع الصلاحيات جيدة!**\n"
+                "البوت يمكنه التحقق من اشتراكات القناة."
+            )
+        
+        await update.message.reply_text(report_message, parse_mode='Markdown')
+        
+    except Exception as e:
+        error_message = (
+            "❌ **Permission Test Failed / فشل اختبار الصلاحيات**\n\n"
+            f"**Error:** {str(e)}\n\n"
+            "🔧 **Check:**\n"
+            "1. Channel username is correct\n"
+            "2. Bot is added to channel\n"
+            "3. Bot has admin rights\n\n"
+            "🔧 **تحقق من:**\n"
+            "1. اسم المستخدم للقناة صحيح\n"
+            "2. البوت مضاف للقناة\n"
+            "3. البوت لديه صلاحيات مدير"
+        )
+        await update.message.reply_text(error_message, parse_mode='Markdown')
+
+def report_question(user_id: int, question_id: int, report_reason: str):
+    """الإبلاغ عن سؤال"""
+    try:
+        # تحديث السجل الموجود أو إنشاء سجل جديد
+        response = supabase.table('user_answers_bot').update({
+            'is_reported': True,
+            'report_reason': report_reason
+        }).eq('user_id', user_id).eq('question_id', question_id).execute()
+        
+        print(f"✅ Question {question_id} reported by user {user_id}: {report_reason}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Warning: Could not report question: {e}")
+        return False
+
+async def check_channel_subscription(user_id: int, bot):
+    """التحقق من اشتراك المستخدم في القناة"""
+    if not CHANNEL_SUBSCRIPTION_REQUIRED:
+        return True
+    
+    try:
+        # إزالة @ من معرف القناة إذا كان موجوداً
+        channel_id = TELEGRAM_CHANNEL_ID.lstrip('@')
+        
+        # التحقق من حالة العضو في القناة
+        member = await bot.get_chat_member(f"@{channel_id}", user_id)
+        
+        # الحالات المقبولة: member, administrator, creator
+        if member.status in ['member', 'administrator', 'creator']:
+            print(f"✅ User {user_id} is subscribed to channel @{channel_id}")
+            return True
+        else:
+            print(f"❌ User {user_id} is not subscribed to channel @{channel_id} (status: {member.status})")
+            return False
+            
+    except Exception as e:
+        print(f"⚠️ Warning: Could not check channel subscription for user {user_id}: {e}")
+        # في حالة الخطأ، نفترض أن المستخدم مشترك (لعدم إيقاف البوت)
+        return True
+
+async def show_subscription_required(update: Update, context: ContextTypes.DEFAULT_TYPE, is_new_user: bool = False):
+    """عرض رسالة طلب الاشتراك في القناة"""
+    
+    if is_new_user:
+        # للمستخدمين الجدد - بعد 10 أسئلة
+        message = (
+            "🎉 **Congratulations! / مبروك!**\n\n"
+            "You've completed your first 10 questions!\n"
+            "لقد أكملت أول 10 أسئلة!\n\n"
+            "🌟 **To continue learning, please subscribe to our channel:**\n"
+            "🌟 **لمتابعة التعلم، يرجى الاشتراك في قناتنا:**\n\n"
+            f"📢 **Channel:** {TELEGRAM_CHANNEL_ID}\n"
+            f"🔗 **Link:** {TELEGRAM_CHANNEL_LINK}\n\n"
+            "After subscribing, you can continue with more questions!\n"
+            "بعد الاشتراك، يمكنك متابعة المزيد من الأسئلة!"
+        )
+    else:
+        # للمستخدمين القدامى - عند إلغاء الاشتراك
+        message = (
+            "⚠️ **Subscription Required / الاشتراك مطلوب**\n\n"
+            "Your access has been paused.\n"
+            "تم إيقاف وصولك مؤقتاً.\n\n"
+            "🌟 **Please subscribe to our channel to continue:**\n"
+            "🌟 **يرجى الاشتراك في قناتنا للمتابعة:**\n\n"
+            f"📢 **Channel:** {TELEGRAM_CHANNEL_ID}\n"
+            f"🔗 **Link:** {TELEGRAM_CHANNEL_LINK}\n\n"
+            "After subscribing, click 'Check Subscription' below.\n"
+            "بعد الاشتراك، اضغط على 'التحقق من الاشتراك' أدناه."
+        )
+    
+    # إنشاء الأزرار
+    keyboard = [
+        [InlineKeyboardButton("📢 Join Channel / انضم للقناة", url=TELEGRAM_CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ Check Subscription / التحقق من الاشتراك", callback_data="check_subscription")],
+        [InlineKeyboardButton("🏠 Main Menu / القائمة الرئيسية", callback_data="menu")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if hasattr(update, 'callback_query') and update.callback_query:
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """التحقق من الاشتراك في القناة"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    update_last_interaction(user.id)
+    
+    # التحقق من الاشتراك
+    is_subscribed = await check_channel_subscription(user.id, context.bot)
+    
+    if is_subscribed:
+        # المستخدم مشترك - يمكنه المتابعة
+        success_message = (
+            "✅ **Subscription Verified! / تم التحقق من الاشتراك!**\n\n"
+            "Welcome back! You can now continue learning.\n"
+            "مرحباً بعودتك! يمكنك الآن متابعة التعلم.\n\n"
+            "Choose what you want to do:\n"
+            "اختر ما تريد القيام به:"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🚀 Start Quiz / بدء الاختبار", callback_data="quiz")],
+            [InlineKeyboardButton("📊 My Stats / إحصائياتي", callback_data="stats")],
+            [InlineKeyboardButton("🏠 Main Menu / القائمة الرئيسية", callback_data="menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(success_message, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        # المستخدم غير مشترك
+        await show_subscription_required(update, context, is_new_user=False)
 
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
     print("🚀 Starting Medical Questions Bot...")
     print(f"📡 Supabase URL: {SUPABASE_URL}")
     print(f"🤖 Telegram Token: {TELEGRAM_TOKEN[:20]}...")
+    
+    # معلومات القناة
+    if CHANNEL_SUBSCRIPTION_REQUIRED:
+        print(f"📢 Channel Subscription Required: YES")
+        print(f"📢 Channel ID: {TELEGRAM_CHANNEL_ID}")
+        print(f"🔗 Channel Link: {TELEGRAM_CHANNEL_LINK}")
+    else:
+        print(f"📢 Channel Subscription Required: NO")
     
     # إنشاء التطبيق
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -583,6 +1119,13 @@ def main():
     application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
     application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
+    application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
+    application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
+    application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
+    application.add_handler(CommandHandler("test_count", test_count))
+    application.add_handler(CommandHandler("db_info", db_info))
+    application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+    application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
     
     # تشغيل البوت
     print("✅ Bot is running and ready to receive messages!")
