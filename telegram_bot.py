@@ -1123,6 +1123,15 @@ def init_telegram_app():
     if application is None:
         try:
             print("🚀 Initializing Telegram application...")
+            
+            # Check if required environment variables are available
+            if not TELEGRAM_TOKEN:
+                print("❌ TELEGRAM_TOKEN not available")
+                logger.error("TELEGRAM_TOKEN not available")
+                return
+            
+            print(f"🤖 Using Telegram Token: {TELEGRAM_TOKEN[:20]}...")
+            
             application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
             
             # Add all handlers
@@ -1142,9 +1151,11 @@ def init_telegram_app():
             application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
             
             print("✅ Telegram application initialized successfully!")
+            logger.info("Telegram application initialized successfully!")
         except Exception as e:
             print(f"❌ Error initializing Telegram app: {e}")
             logger.error(f"Error initializing Telegram app: {e}")
+            application = None
 
 # Initialize when Flask starts
 init_telegram_app()
@@ -1177,6 +1188,16 @@ def webhook():
     """Webhook endpoint for Telegram updates"""
     try:
         logger.info("Webhook endpoint called")
+        
+        # Ensure Telegram application is initialized
+        if application is None:
+            logger.info("Telegram application not initialized, initializing now...")
+            init_telegram_app()
+        
+        if application is None:
+            logger.error("Failed to initialize Telegram application")
+            return jsonify({'error': 'Telegram application not available'}), 500
+        
         # Get the update from Telegram
         update_data = request.get_json()
         
