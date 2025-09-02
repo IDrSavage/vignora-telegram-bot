@@ -1109,6 +1109,7 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await show_subscription_required(update, context, is_new_user=False)
 
 # Flask app for Cloud Run
+# Updated for Gunicorn deployment
 app = Flask(__name__)
 
 @app.route('/health', methods=['GET'])
