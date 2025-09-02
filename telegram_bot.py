@@ -813,13 +813,13 @@ async def back_to_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "current_question" in context.user_data:
         # إعادة إنشاء رسالة النتيجة
         selected_answer = context.user_data.get("last_selected_answer", "")
-        correct_answer = context.user_data["current_question"]["correct_answer"]
-        explanation = context.user_data["current_question"]["explanation"]
-        
-        # إنشاء رسالة النتيجة
-        if selected_answer == correct_answer:
-            result_message = "✅ إجابة صحيحة!\nCorrect answer!\n\n"
-        else:
+    correct_answer = context.user_data["current_question"]["correct_answer"]
+    explanation = context.user_data["current_question"]["explanation"]
+    
+    # إنشاء رسالة النتيجة
+    if selected_answer == correct_answer:
+        result_message = "✅ إجابة صحيحة!\nCorrect answer!\n\n"
+    else:
             # عرض الإجابة الصحيحة كاملة
             correct_answer_text = ""
             question_data = context.user_data.get("current_question_data", {})
@@ -845,8 +845,8 @@ async def back_to_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result_message += f"**Explanation / الشرح:**\n{explanation}"
         else:
             result_message += "**No explanation available / لا يوجد شرح متاح**"
-        
-        # أزرار التحكم
+    
+    # أزرار التحكم
         keyboard = [
             [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
             [InlineKeyboardButton("🚨 Report Question / الإبلاغ عن السؤال", callback_data="report")],
@@ -1186,4 +1186,4 @@ def main():
         application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    main() 
