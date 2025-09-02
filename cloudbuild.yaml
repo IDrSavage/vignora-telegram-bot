@@ -35,10 +35,13 @@ steps:
 images:
   - 'gcr.io/$PROJECT_ID/vignora-bot:$COMMIT_SHA'
 
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 substitutions:
-  _TELEGRAM_TOKEN: '8167290716:AAGKmKmzFsGPFplFVw4gG8JwOCcw633lKbs'
-  _SUPABASE_URL: 'https://dxtlffbkrfgasfbhlfmn.supabase.co'
-  _SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR4dGxmZmJrcmZnYXNmYmhsZm1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU5MzAxNjksImV4cCI6MjA3MTUwNjE2OX0.Zqsb_0zsXeNIzqjy9OoxwqATL5KCKdeO0uWgZMJaPug'
+  _TELEGRAM_TOKEN: ''
+  _SUPABASE_URL: ''
+  _SUPABASE_KEY: ''
   _TELEGRAM_CHANNEL_ID: '@Vignora'
   _TELEGRAM_CHANNEL_LINK: 'https://t.me/Vignora'
   _CHANNEL_SUBSCRIPTION_REQUIRED: 'true'
