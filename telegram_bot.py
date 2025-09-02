@@ -596,11 +596,15 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # تنسيق السؤال مع عدد الأسئلة المتبقية
+    date_added_text = ""
+    if SHOW_DATE_ADDED:
+        date_added_text = f"📅 **Added:** {format_timestamp(question_data.get('date_added'))}\n\n"
+    
     question_text = (
         f"📚 **Question / السؤال:**\n"
         f"{question_data.get('question', 'No question')}\n\n"
         f"📊 **Remaining:** {remaining_questions} / {total_questions}\n\n"
-        f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\\n\\n' if SHOW_DATE_ADDED else ''}"
+        f"{date_added_text}"
         "**Options / الخيارات:**"
     )
     
