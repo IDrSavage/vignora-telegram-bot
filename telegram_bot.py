@@ -1167,18 +1167,6 @@ async def process_update(update_data):
     except Exception as e:
         logger.error(f"Error processing update: {e}")
 
-def run_flask():
-    """Run Flask app"""
-    try:
-        port = int(os.environ.get('PORT', 8080))
-        print(f"🌐 Starting Flask server on port {port}")
-        logger.info(f"Starting Flask server on port {port}")
-        app.run(host='0.0.0.0', port=port, debug=False)
-    except Exception as e:
-        print(f"❌ Error starting Flask server: {e}")
-        logger.error(f"Flask server error: {e}")
-        raise e
-
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
     global application
@@ -1228,19 +1216,16 @@ def main():
         logger.info("Running on Cloud Run - Starting Flask server...")
         print("📝 Note: Webhook will be configured by deployment script")
         
-        # Run Flask app in a separate thread
-        flask_thread = threading.Thread(target=run_flask, daemon=True)
-        flask_thread.start()
-        logger.info("Flask server thread started")
-        
-        # Keep the main thread alive
+        # Start Flask directly in main thread for Cloud Run
         try:
-            while True:
-                import time
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("🛑 Bot stopped by user")
-            logger.info("Bot stopped by user")
+            port = int(os.environ.get('PORT', 8080))
+            print(f"🌐 Starting Flask server on port {port}")
+            logger.info(f"Starting Flask server on port {port}")
+            app.run(host='0.0.0.0', port=port, debug=False)
+        except Exception as e:
+            print(f"❌ Error starting Flask server: {e}")
+            logger.error(f"Flask server error: {e}")
+            raise e
     else:
         print("🔄 Running locally - Using polling mode...")
         logger.info("Running locally - Using polling mode...")
