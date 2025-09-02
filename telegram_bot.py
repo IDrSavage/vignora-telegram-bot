@@ -1116,6 +1116,39 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Updated for Gunicorn deployment
 app = Flask(__name__)
 
+# Initialize Telegram application when Flask starts
+def init_telegram_app():
+    """Initialize Telegram application for webhook mode"""
+    global application
+    if application is None:
+        try:
+            print("🚀 Initializing Telegram application...")
+            application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            
+            # Add all handlers
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+            application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
+            application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
+            application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
+            application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
+            application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
+            application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
+            application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
+            application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
+            application.add_handler(CommandHandler("test_count", test_count))
+            application.add_handler(CommandHandler("db_info", db_info))
+            application.add_handler(CallbackQueryHandler(test_bot_permissions, pattern="^test_bot_permissions$"))
+            application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
+            
+            print("✅ Telegram application initialized successfully!")
+        except Exception as e:
+            print(f"❌ Error initializing Telegram app: {e}")
+            logger.error(f"Error initializing Telegram app: {e}")
+
+# Initialize when Flask starts
+init_telegram_app()
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint for Cloud Run"""
