@@ -31,9 +31,9 @@ gcloud services enable cloudbuild.googleapis.com
 gcloud services enable run.googleapis.com
 gcloud services enable containerregistry.googleapis.com
 
-# Build and deploy
+# Build and deploy with environment variables
 echo "🏗️ Building and deploying..."
-gcloud run deploy vignora-bot \
+gcloud run deploy vignora-telegram-bot \
     --source . \
     --region us-central1 \
     --platform managed \
@@ -41,11 +41,17 @@ gcloud run deploy vignora-bot \
     --memory 512Mi \
     --cpu 1 \
     --max-instances 10 \
-    --timeout 300 \
-    --set-env-vars TELEGRAM_TOKEN="$TELEGRAM_TOKEN",SUPABASE_URL="$SUPABASE_URL",SUPABASE_KEY="$SUPABASE_KEY",TELEGRAM_CHANNEL_ID="$TELEGRAM_CHANNEL_ID",TELEGRAM_CHANNEL_LINK="$TELEGRAM_CHANNEL_LINK",CHANNEL_SUBSCRIPTION_REQUIRED="$CHANNEL_SUBSCRIPTION_REQUIRED"
+    --timeout 300s \
+    --port 8080 \
+    --set-env-vars TELEGRAM_TOKEN="$TELEGRAM_TOKEN" \
+    --set-env-vars SUPABASE_URL="$SUPABASE_URL" \
+    --set-env-vars SUPABASE_KEY="$SUPABASE_KEY" \
+    --set-env-vars TELEGRAM_CHANNEL_ID="$TELEGRAM_CHANNEL_ID" \
+    --set-env-vars TELEGRAM_CHANNEL_LINK="$TELEGRAM_CHANNEL_LINK" \
+    --set-env-vars CHANNEL_SUBSCRIPTION_REQUIRED="$CHANNEL_SUBSCRIPTION_REQUIRED"
 
 # Get the service URL
-SERVICE_URL=$(gcloud run services describe vignora-bot --region=us-central1 --format="value(status.url)")
+SERVICE_URL=$(gcloud run services describe vignora-telegram-bot --region=us-central1 --format="value(status.url)")
 
 echo "✅ Deployment completed successfully!"
 echo "🌐 Service URL: $SERVICE_URL"
@@ -60,3 +66,14 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook" \
 
 echo "🎉 Bot is now live on Google Cloud Run!"
 echo "📱 Users can start the bot with /start"
+echo ""
+echo "⚠️  IMPORTANT: Make sure these environment variables are set:"
+echo "   - TELEGRAM_TOKEN (your bot token)"
+echo "   - SUPABASE_URL (your supabase project URL)"
+echo "   - SUPABASE_KEY (your supabase key)"
+echo "   - TELEGRAM_CHANNEL_ID (your channel ID, e.g., @Vignora)"
+echo "   - TELEGRAM_CHANNEL_LINK (your channel link, e.g., https://t.me/Vignora)"
+echo "   - CHANNEL_SUBSCRIPTION_REQUIRED (true/false)"
+echo "   - PROJECT_ID (your google cloud project ID)"
+echo ""
+echo "💡 You can set these in your .env file or as environment variables"

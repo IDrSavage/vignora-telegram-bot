@@ -1,276 +1,84 @@
-# 🚀 Vignora Telegram Bot - Google Cloud Run Deployment Guide
+# Vignora Telegram Bot - Cloud Run Deployment Guide
 
-## 📋 Prerequisites / المتطلبات المسبقة
+## المشكلة الأساسية: "container failed to start and listen on PORT=8080"
 
-### 1. Google Cloud Account
-- Create a Google Cloud account: https://cloud.google.com/
-- Create a new project or use existing one
+هذا الخطأ يعني أن الحاوية ما اشتغلت أصلاً أو خرجت قبل ما تفتح سيرفر على 8080. 
 
-### 2. Install Google Cloud CLI
+### الأسباب الشائعة:
+
+1. **متغيّرات البيئة الأساسية ناقصة** ⇒ السكربت يرمي ValueError ويخرج قبل تشغيل السيرفر
+2. **الملف يطلب TELEGRAM_TOKEN وSUPABASE_URL وSUPABASE_KEY**، ولو ناقص واحد منها يرفع استثناء ويتوقف التشغيل
+
+## الحل:
+
+### 1. تعديل الكود (تم إنجازه ✅)
+
+تم تعديل `telegram_bot.py` ليتحقق من المتغيرات المطلوبة فقط عند تشغيل البوت في وضع polling، وليس عند تشغيل Flask server.
+
+### 2. تعيين متغيّرات البيئة على Cloud Run
+
 ```bash
-# Windows (PowerShell)
-# Download from: https://cloud.google.com/sdk/docs/install
-
-# macOS
-brew install google-cloud-sdk
-
-# Linux
-curl https://sdk.cloud.google.com | bash
-exec -l $SHELL
+gcloud run deploy vignora-telegram-bot \
+  --source . \
+  --region=us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars TELEGRAM_TOKEN="YOUR_TELEGRAM_BOT_TOKEN" \
+  --set-env-vars SUPABASE_URL="https://xxxx.supabase.co" \
+  --set-env-vars SUPABASE_KEY="YOUR_SUPABASE_SERVICE_ROLE_OR_ANON_KEY" \
+  --set-env-vars TELEGRAM_CHANNEL_ID="@Vignora" \
+  --set-env-vars TELEGRAM_CHANNEL_LINK="https://t.me/Vignora" \
+  --set-env-vars CHANNEL_SUBSCRIPTION_REQUIRED="true" \
+  --port=8080 \
+  --timeout=300s
 ```
 
-### 3. Enable Billing
-- Enable billing for your Google Cloud project
-- Cloud Run requires billing to be enabled
+### 3. استخدام gunicorn (مُستحسن)
 
-## 🔧 Setup Steps / خطوات الإعداد
+تم إضافة `gunicorn` إلى `requirements.txt` وإنشاء `Procfile`:
 
-### Step 1: Authenticate with Google Cloud
+```txt
+web: gunicorn telegram_bot:app --bind 0.0.0.0:$PORT --workers 2 --timeout 300
+```
+
+### 4. خطوات النشر:
+
+1. **عدّل `deploy.sh`**:
+   - استبدل `YOUR_TELEGRAM_BOT_TOKEN` بالتوكن الحقيقي
+   - استبدل `https://xxxx.supabase.co` برابط Supabase الحقيقي
+   - استبدل `YOUR_SUPABASE_SERVICE_ROLE_OR_ANON_KEY` بالمفتاح الحقيقي
+   - استبدل `your-project-id` بمعرف المشروع الحقيقي
+
+2. **شغّل النشر**:
+   ```bash
+   chmod +x deploy.sh
+   ./deploy.sh
+   ```
+
+### 5. التحقق من النجاح:
+
+- **Health Check**: `https://YOUR-SERVICE-URL.run.app/health`
+- **Home**: `https://YOUR-SERVICE-URL.run.app/`
+- **Webhook**: `https://YOUR-SERVICE-URL.run.app/webhook`
+
+### 6. إعداد Webhook:
+
 ```bash
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
+curl -X POST "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook" \
+  -d "url=https://YOUR-SERVICE-URL.run.app/webhook"
 ```
 
-### Step 2: Enable Required APIs
-```bash
-gcloud services enable cloudbuild.googleapis.com
-gcloud services enable run.googleapis.com
-gcloud services enable containerregistry.googleapis.com
-```
+## ملاحظات مهمة:
 
-### Step 3: Set Environment Variables
-Create a `.env` file with your credentials:
-```env
-TELEGRAM_TOKEN=your_telegram_bot_token
-SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_key
-TELEGRAM_CHANNEL_ID=@Vignora
-TELEGRAM_CHANNEL_LINK=https://t.me/Vignora
-CHANNEL_SUBSCRIPTION_REQUIRED=true
-```
+- التطبيق الآن يتحقق من المتغيرات فقط عند الحاجة
+- Flask server يشتغل حتى لو كانت بعض المتغيرات ناقصة
+- البوت سيعمل بشكل محدود حتى يتم تعيين جميع المتغيرات
+- تم إضافة gunicorn لتحسين الأداء على Cloud Run
 
-## 🚀 Deployment Methods / طرق النشر
+## استكشاف الأخطاء:
 
-### Method 1: Using deploy.sh Script (Recommended)
-```bash
-# Make script executable
-chmod +x deploy.sh
+إذا استمرت المشكلة، راجع:
 
-# Set environment variables
-export TELEGRAM_TOKEN="your_token"
-export SUPABASE_URL="your_url"
-export SUPABASE_KEY="your_key"
-export TELEGRAM_CHANNEL_ID="@Vignora"
-export TELEGRAM_CHANNEL_LINK="https://t.me/Vignora"
-export CHANNEL_SUBSCRIPTION_REQUIRED="true"
-
-# Run deployment
-./deploy.sh
-```
-
-### Method 2: Manual Deployment
-```bash
-# Build and deploy
-gcloud run deploy vignora-bot \
-    --source . \
-    --region us-central1 \
-    --platform managed \
-    --allow-unauthenticated \
-    --memory 512Mi \
-    --cpu 1 \
-    --max-instances 10 \
-    --timeout 300 \
-    --set-env-vars TELEGRAM_TOKEN="your_token",SUPABASE_URL="your_url",SUPABASE_KEY="your_key",TELEGRAM_CHANNEL_ID="@Vignora",TELEGRAM_CHANNEL_LINK="https://t.me/Vignora",CHANNEL_SUBSCRIPTION_REQUIRED="true"
-```
-
-### Method 3: Using Cloud Build
-```bash
-# Update cloudbuild.yaml with your values
-# Then run:
-gcloud builds submit --config cloudbuild.yaml .
-```
-
-## 🔗 Post-Deployment Setup / الإعداد بعد النشر
-
-### 1. Get Service URL
-```bash
-gcloud run services describe vignora-bot --region=us-central1 --format="value(status.url)"
-```
-
-### 2. Set Telegram Webhook
-Replace `YOUR_SERVICE_URL` with the actual URL:
-```bash
-curl -X POST "https://api.telegram.org/botYOUR_TOKEN/setWebhook" \
-    -H "Content-Type: application/json" \
-    -d "{\"url\": \"YOUR_SERVICE_URL/webhook\"}"
-```
-
-### 3. Test Health Check
-```bash
-curl https://YOUR_SERVICE_URL/health
-```
-
-## 📊 Monitoring / المراقبة
-
-### View Logs
-```bash
-gcloud run services logs read vignora-bot --region=us-central1
-```
-
-### Monitor Performance
-- Go to Google Cloud Console
-- Navigate to Cloud Run
-- Select your service
-- View metrics and logs
-
-## 🔧 Configuration Options / خيارات التكوين
-
-### Memory and CPU
-- Default: 512Mi RAM, 1 CPU
-- Adjust based on usage:
-  ```bash
-  --memory 1Gi --cpu 2
-  ```
-
-### Scaling
-- Default: 0-10 instances
-- Adjust max instances:
-  ```bash
-  --max-instances 20
-  ```
-
-### Timeout
-- Default: 300 seconds
-- Adjust if needed:
-  ```bash
-  --timeout 600
-  ```
-
-## 🛠️ Troubleshooting / استكشاف الأخطاء
-
-### Common Issues
-
-#### 1. Build Failures
-```bash
-# Check build logs
-gcloud builds log BUILD_ID
-```
-
-#### 2. Runtime Errors
-```bash
-# Check service logs
-gcloud run services logs read vignora-bot --region=us-central1
-```
-
-#### 3. Webhook Issues
-```bash
-# Test webhook manually
-curl -X POST "https://api.telegram.org/botYOUR_TOKEN/getWebhookInfo"
-```
-
-#### 4. Environment Variables
-```bash
-# Verify environment variables
-gcloud run services describe vignora-bot --region=us-central1 --format="value(spec.template.spec.containers[0].env[].name,spec.template.spec.containers[0].env[].value)"
-```
-
-## 💰 Cost Optimization / تحسين التكلفة
-
-### Free Tier
-- Cloud Run offers generous free tier
-- 2 million requests per month
-- 360,000 vCPU-seconds
-- 180,000 GiB-seconds
-
-### Cost Monitoring
-```bash
-# View cost breakdown
-gcloud billing accounts list
-```
-
-## 🔒 Security / الأمان
-
-### Best Practices
-1. Use environment variables for secrets
-2. Enable Cloud Audit Logs
-3. Use IAM roles with minimal permissions
-4. Enable VPC connector if needed
-
-### IAM Setup
-```bash
-# Grant Cloud Run Admin role
-gcloud projects add-iam-policy-binding PROJECT_ID \
-    --member="user:YOUR_EMAIL" \
-    --role="roles/run.admin"
-```
-
-## 📱 Testing / الاختبار
-
-### Local Testing
-```bash
-# Test locally before deployment
-python telegram_bot.py
-```
-
-### Production Testing
-1. Send `/start` to your bot
-2. Test question flow
-3. Test channel subscription
-4. Test reporting system
-
-## 🔄 Updates / التحديثات
-
-### Deploy Updates
-```bash
-# Simply run deploy script again
-./deploy.sh
-```
-
-### Rollback
-```bash
-# List revisions
-gcloud run revisions list --service=vignora-bot --region=us-central1
-
-# Rollback to specific revision
-gcloud run services update-traffic vignora-bot \
-    --to-revisions=REVISION_NAME=100 \
-    --region=us-central1
-```
-
-## 📞 Support / الدعم
-
-### Useful Commands
-```bash
-# Service info
-gcloud run services describe vignora-bot --region=us-central1
-
-# List all services
-gcloud run services list --region=us-central1
-
-# Delete service
-gcloud run services delete vignora-bot --region=us-central1
-```
-
-### Documentation
-- [Cloud Run Documentation](https://cloud.google.com/run/docs)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [Supabase Documentation](https://supabase.com/docs)
-
----
-
-## 🎉 Congratulations!
-Your Vignora Medical Questions Bot is now running on Google Cloud Run!
-
-**Service Features:**
-- ✅ Auto-scaling
-- ✅ High availability
-- ✅ SSL encryption
-- ✅ Global CDN
-- ✅ Pay-per-use pricing
-- ✅ Zero maintenance
-
-**Next Steps:**
-1. Test the bot thoroughly
-2. Monitor performance
-3. Set up alerts
-4. Configure custom domain (optional)
+1. **متغيّرات البيئة** في تبويب Variables & Secrets في خدمة Cloud Run
+2. **السجلات** للبحث عن أول استثناء أثناء الإقلاع
+3. **مسار /health** للتأكد من أن السيرفر يعمل
+4. **Entry point** في Dockerfile (يجب أن يكون `python telegram_bot.py`)

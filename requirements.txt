@@ -1,5 +1,5 @@
 python-telegram-bot==21.7
-supabase==2.18.1
+supabase==2.3.4
 python-dotenv==1.0.0
-httpx==0.28.1
-flask==3.0.0
+flask==3.0.2
+gunicorn==21.2.0

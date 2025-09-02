@@ -20,14 +20,6 @@ TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Vignora")
 TELEGRAM_CHANNEL_LINK = os.getenv("TELEGRAM_CHANNEL_LINK", "https://t.me/Vignora")
 CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "true").lower() == "true"
 
-# التحقق من وجود المتغيرات المطلوبة
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN is required in .env file")
-if not SUPABASE_URL:
-    raise ValueError("SUPABASE_URL is required in .env file")
-if not SUPABASE_KEY:
-    raise ValueError("SUPABASE_KEY is required in .env file")
-
 # إنشاء عميل Supabase
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -42,6 +34,16 @@ SHOW_DATE_ADDED = False
 
 # متغير عام للتطبيق (مطلوب للويبهوك)
 application = None
+
+def validate_environment():
+    """التحقق من وجود المتغيرات المطلوبة"""
+    if not TELEGRAM_TOKEN:
+        raise ValueError("TELEGRAM_TOKEN is required in environment variables")
+    if not SUPABASE_URL:
+        raise ValueError("SUPABASE_URL is required in environment variables")
+    if not SUPABASE_KEY:
+        raise ValueError("SUPABASE_KEY is required in environment variables")
+    return True
 
 def format_timestamp(timestamp):
     """تحويل Unix timestamp إلى تاريخ مفهوم"""
@@ -1165,51 +1167,65 @@ def main():
     global application
     
     print("🚀 Starting Medical Questions Bot...")
-    print(f"📡 Supabase URL: {SUPABASE_URL}")
-    print(f"🤖 Telegram Token: {TELEGRAM_TOKEN[:20]}...")
-    
-    # معلومات القناة
-    if CHANNEL_SUBSCRIPTION_REQUIRED:
-        print(f"📢 Channel Subscription Required: YES")
-        print(f"📢 Channel ID: {TELEGRAM_CHANNEL_ID}")
-        print(f"🔗 Channel Link: {TELEGRAM_CHANNEL_LINK}")
-    else:
-        print(f"📢 Channel Subscription Required: NO")
-    
-    # إنشاء التطبيق
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    # إضافة معالجات الأوامر
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-    application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
-    application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
-    application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-    application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
-    application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
-    application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
-    application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
-    application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
-    application.add_handler(CommandHandler("test_count", test_count))
-    application.add_handler(CommandHandler("db_info", db_info))
-    application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
-    application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
-    
-    # تشغيل البوت
-    print("✅ Bot is running and ready to receive messages!")
-    print("📱 Users can now start the bot with /start")
     
     # Check if running on Cloud Run
     if os.environ.get('PORT'):
         print("🌐 Running on Cloud Run - Starting Flask server...")
-        # Note: Webhook will be set by deploy.sh script after deployment
         print("📝 Note: Webhook will be configured by deployment script")
+        
+        # For Cloud Run, we'll validate environment when needed
+        # but don't fail immediately to allow Flask to start
+        if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
+            print("⚠️ Warning: Some environment variables are missing")
+            print("⚠️ Bot functionality will be limited until variables are set")
         
         # Run Flask app
         run_flask()
     else:
         print("🔄 Running locally - Using polling mode...")
-        application.run_polling()
+        
+        # Validate environment for local polling mode
+        try:
+            validate_environment()
+            print(f"📡 Supabase URL: {SUPABASE_URL}")
+            print(f"🤖 Telegram Token: {TELEGRAM_TOKEN[:20]}...")
+            
+            # معلومات القناة
+            if CHANNEL_SUBSCRIPTION_REQUIRED:
+                print(f"📢 Channel Subscription Required: YES")
+                print(f"📢 Channel ID: {TELEGRAM_CHANNEL_ID}")
+                print(f"🔗 Channel Link: {TELEGRAM_CHANNEL_LINK}")
+            else:
+                print(f"📢 Channel Subscription Required: NO")
+            
+            # إنشاء التطبيق
+            application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            
+            # إضافة معالجات الأوامر
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+            application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
+            application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
+            application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
+            application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
+            application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
+            application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
+            application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
+            application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
+            application.add_handler(CommandHandler("test_count", test_count))
+            application.add_handler(CommandHandler("db_info", db_info))
+            application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+            application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
+            
+            # تشغيل البوت
+            print("✅ Bot is running and ready to receive messages!")
+            print("📱 Users can now start the bot with /start")
+            
+            application.run_polling()
+        except ValueError as e:
+            print(f"❌ Error: {e}")
+            print("❌ Please check your .env file and ensure all required variables are set")
+            return
 
 if __name__ == "__main__":
     main()
