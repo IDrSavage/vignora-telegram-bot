@@ -1116,6 +1116,20 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Updated for Gunicorn deployment
 app = Flask(__name__)
 
+# Create a single global asyncio loop to be shared between init and webhook processing
+_event_loop = None
+_loop_thread = None
+
+def _ensure_event_loop_running():
+    global _event_loop, _loop_thread
+    if _event_loop is None:
+        _event_loop = asyncio.new_event_loop()
+        def _run_loop():
+            asyncio.set_event_loop(_event_loop)
+            _event_loop.run_forever()
+        _loop_thread = threading.Thread(target=_run_loop, name="telegram-event-loop", daemon=True)
+        _loop_thread.start()
+
 # Initialize Telegram application when Flask starts
 def init_telegram_app():
     """Initialize Telegram application for webhook mode"""
@@ -1150,12 +1164,13 @@ def init_telegram_app():
             application.add_handler(CallbackQueryHandler(test_bot_permissions, pattern="^test_bot_permissions$"))
             application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
             
-            # Initialize the application for webhook mode
+            # Ensure loop and initialize/start on the same loop
+            _ensure_event_loop_running()
             async def _startup():
                 await application.initialize()
                 await application.start()
-            
-            asyncio.run(_startup())
+            # Wait for startup to complete to avoid race
+            asyncio.run_coroutine_threadsafe(_startup(), _event_loop).result()
             
             print("✅ Telegram application initialized successfully!")
             logger.info("Telegram application initialized successfully!")
@@ -1207,31 +1222,16 @@ def webhook():
         
         # Get the update from Telegram
         update_data = request.get_json()
+        update = Update.de_json(update_data, application.bot)
         
-        # Process the update asynchronously
-        asyncio.run(process_update(update_data))
+        # Process the update on the same global loop where the application was initialized
+        _ensure_event_loop_running()
+        asyncio.run_coroutine_threadsafe(application.process_update(update), _event_loop)
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return jsonify({'error': str(e)}), 500
-
-async def process_update(update_data):
-    """Process Telegram update asynchronously"""
-    try:
-        logger.info("Processing Telegram update")
-        if application is None:
-            logger.error("Application is not initialized yet.")
-            return
-        
-        # Create update object
-        update = Update.de_json(update_data, application.bot)
-        
-        # Process the update
-        await application.process_update(update)
-        logger.info("Telegram update processed successfully")
-    except Exception as e:
-        logger.error(f"Error processing update: {e}")
 
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
