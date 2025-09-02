@@ -9,6 +9,13 @@ import logging
 from flask import Flask, request, jsonify
 import threading
 
+# إعداد logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # تحميل متغيرات البيئة
 load_dotenv()
 
@@ -593,7 +600,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📚 **Question / السؤال:**\n"
         f"{question_data.get('question', 'No question')}\n\n"
         f"📊 **Remaining:** {remaining_questions} / {total_questions}\n\n"
-        f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\\n\\n' if SHOW_DATE_ADDED else ''}"
+        f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\n\n' if SHOW_DATE_ADDED else ''}"
         "**Options / الخيارات:**"
     )
     
@@ -1107,6 +1114,7 @@ app = Flask(__name__)
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint for Cloud Run"""
+    logger.info("Health check endpoint called")
     return jsonify({
         'status': 'healthy',
         'bot': 'Vignora Medical Questions Bot',
@@ -1116,6 +1124,7 @@ def health_check():
 @app.route('/', methods=['GET'])
 def home():
     """Home endpoint"""
+    logger.info("Home endpoint called")
     return jsonify({
         'message': 'Vignora Medical Questions Bot is running!',
         'status': 'active',
@@ -1129,6 +1138,7 @@ def home():
 def webhook():
     """Webhook endpoint for Telegram updates"""
     try:
+        logger.info("Webhook endpoint called")
         # Get the update from Telegram
         update_data = request.get_json()
         
@@ -1137,14 +1147,15 @@ def webhook():
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
-        logging.error(f"Webhook error: {e}")
+        logger.error(f"Webhook error: {e}")
         return jsonify({'error': str(e)}), 500
 
 async def process_update(update_data):
     """Process Telegram update asynchronously"""
     try:
+        logger.info("Processing Telegram update")
         if application is None:
-            logging.error("Application is not initialized yet.")
+            logger.error("Application is not initialized yet.")
             return
         
         # Create update object
@@ -1152,19 +1163,28 @@ async def process_update(update_data):
         
         # Process the update
         await application.process_update(update)
+        logger.info("Telegram update processed successfully")
     except Exception as e:
-        logging.error(f"Error processing update: {e}")
+        logger.error(f"Error processing update: {e}")
 
 def run_flask():
     """Run Flask app"""
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    try:
+        port = int(os.environ.get('PORT', 8080))
+        print(f"🌐 Starting Flask server on port {port}")
+        logger.info(f"Starting Flask server on port {port}")
+        app.run(host='0.0.0.0', port=port, debug=False)
+    except Exception as e:
+        print(f"❌ Error starting Flask server: {e}")
+        logger.error(f"Flask server error: {e}")
+        raise e
 
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
     global application
     
     print("🚀 Starting Medical Questions Bot...")
+    logger.info("Starting Medical Questions Bot...")
     print(f"📡 Supabase URL: {SUPABASE_URL}")
     print(f"🤖 Telegram Token: {TELEGRAM_TOKEN[:20]}...")
     
@@ -1178,6 +1198,7 @@ def main():
     
     # إنشاء التطبيق
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    logger.info("Telegram application created successfully")
     
     # إضافة معالجات الأوامر
     application.add_handler(CommandHandler("start", start))
@@ -1192,23 +1213,37 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
     application.add_handler(CommandHandler("test_count", test_count))
     application.add_handler(CommandHandler("db_info", db_info))
-    application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+    application.add_handler(CallbackQueryHandler(test_bot_permissions, pattern="^test_bot_permissions$"))
     application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
+    logger.info("All handlers added successfully")
     
     # تشغيل البوت
     print("✅ Bot is running and ready to receive messages!")
     print("📱 Users can now start the bot with /start")
+    logger.info("Bot is running and ready to receive messages!")
     
     # Check if running on Cloud Run
     if os.environ.get('PORT'):
         print("🌐 Running on Cloud Run - Starting Flask server...")
-        # Note: Webhook will be set by deploy.sh script after deployment
+        logger.info("Running on Cloud Run - Starting Flask server...")
         print("📝 Note: Webhook will be configured by deployment script")
         
-        # Run Flask app
-        run_flask()
+        # Run Flask app in a separate thread
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        logger.info("Flask server thread started")
+        
+        # Keep the main thread alive
+        try:
+            while True:
+                import time
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("🛑 Bot stopped by user")
+            logger.info("Bot stopped by user")
     else:
         print("🔄 Running locally - Using polling mode...")
+        logger.info("Running locally - Using polling mode...")
         application.run_polling()
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ pip install -r requirements.txt
 TELEGRAM_TOKEN=your_actual_bot_token_here
 SUPABASE_URL=your_actual_supabase_url_here
 SUPABASE_KEY=your_actual_supabase_key_here
-```
+```pyح
 
 3. Run the bot:
 ```bash
