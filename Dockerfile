@@ -9,25 +9,15 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY telegram_bot.py .
+COPY . .
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash app
-USER app
-
-# Expose port (Cloud Run will set PORT environment variable)
+# Expose port
 EXPOSE 8080
 
-# Health check endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8080/health')" || exit 1
-
-# Run the bot with Gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "300", "telegram_bot:app"]
+# Run the bot directly with Python (PTB handles webhook internally)
+CMD ["python", "telegram_bot.py"]

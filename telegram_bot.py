@@ -6,8 +6,6 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
-from flask import Flask, request, jsonify
-import threading
 
 # إعداد logging
 logging.basicConfig(
@@ -47,7 +45,7 @@ except Exception as e:
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
 
-# متغير عام للتطبيق (مطلوب للويبهوك)
+# متغير عام للتطبيق
 application = None
 
 def format_timestamp(timestamp):
@@ -1112,126 +1110,6 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # المستخدم غير مشترك
         await show_subscription_required(update, context, is_new_user=False)
 
-# Flask app for Cloud Run
-# Updated for Gunicorn deployment
-app = Flask(__name__)
-
-# Create a single global asyncio loop to be shared between init and webhook processing
-_event_loop = None
-_loop_thread = None
-
-def _ensure_event_loop_running():
-    global _event_loop, _loop_thread
-    if _event_loop is None:
-        _event_loop = asyncio.new_event_loop()
-        def _run_loop():
-            asyncio.set_event_loop(_event_loop)
-            _event_loop.run_forever()
-        _loop_thread = threading.Thread(target=_run_loop, name="telegram-event-loop", daemon=True)
-        _loop_thread.start()
-
-# Initialize Telegram application when Flask starts
-def init_telegram_app():
-    """Initialize Telegram application for webhook mode"""
-    global application
-    if application is None:
-        try:
-            print("🚀 Initializing Telegram application...")
-            
-            # Check if required environment variables are available
-            if not TELEGRAM_TOKEN:
-                print("❌ TELEGRAM_TOKEN not available")
-                logger.error("TELEGRAM_TOKEN not available")
-                return
-            
-            print(f"🤖 Using Telegram Token: {TELEGRAM_TOKEN[:20]}...")
-            
-            application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-            
-            # Add all handlers
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-            application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
-            application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
-            application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-            application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
-            application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
-            application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
-            application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
-            application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
-            application.add_handler(CommandHandler("test_count", test_count))
-            application.add_handler(CommandHandler("db_info", db_info))
-            application.add_handler(CallbackQueryHandler(test_bot_permissions, pattern="^test_bot_permissions$"))
-            application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
-            
-            # Ensure loop and initialize/start on the same loop
-            _ensure_event_loop_running()
-            async def _startup():
-                await application.initialize()
-                await application.start()
-            # Wait for startup to complete to avoid race
-            asyncio.run_coroutine_threadsafe(_startup(), _event_loop).result()
-            
-            print("✅ Telegram application initialized successfully!")
-            logger.info("Telegram application initialized successfully!")
-        except Exception as e:
-            print(f"❌ Error initializing Telegram app: {e}")
-            logger.error(f"Error initializing Telegram app: {e}")
-            application = None
-
-# Initialize when Flask starts
-init_telegram_app()
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint for Cloud Run"""
-    logger.info("Health check endpoint called")
-    return jsonify({
-        'status': 'healthy',
-        'bot': 'Vignora Medical Questions Bot',
-        'timestamp': datetime.now().isoformat()
-    }), 200
-
-@app.route('/', methods=['GET'])
-def home():
-    """Home endpoint"""
-    logger.info("Home endpoint called")
-    return jsonify({
-        'message': 'Vignora Medical Questions Bot is running!',
-        'status': 'active',
-        'endpoints': {
-            'health': '/health',
-            'webhook': '/webhook'
-        }
-    }), 200
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Webhook endpoint for Telegram updates"""
-    try:
-        logger.info("Webhook endpoint called")
-        
-        # Ensure Telegram application is initialized
-        if application is None:
-            logger.info("Telegram application not initialized, initializing now...")
-            init_telegram_app()
-        
-        if application is None:
-            logger.error("Failed to initialize Telegram application")
-            return jsonify({'error': 'Telegram application not available'}), 500
-        
-        # Get the update from Telegram
-        update_data = request.get_json()
-        update = Update.de_json(update_data, application.bot)
-        
-        # Schedule processing on the application's own loop to avoid loop mismatch
-        application.create_task(application.process_update(update))
-        
-        return jsonify({'status': 'ok'}), 200
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return jsonify({'error': str(e)}), 500
-
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
     global application
@@ -1277,18 +1155,31 @@ def main():
     
     # Check if running on Cloud Run
     if os.environ.get('PORT'):
-        print("🌐 Running on Cloud Run with Gunicorn...")
-        logger.info("Running on Cloud Run with Gunicorn...")
-        print("📝 Note: Flask will be started by Gunicorn")
-        # Don't start Flask here - Gunicorn will handle it
-        # Just keep the main thread alive for the bot
+        print("🌐 Running on Cloud Run with built-in webhook...")
+        logger.info("Running on Cloud Run with built-in webhook...")
+        
+        # Get Cloud Run hostname from environment
+        cloud_run_hostname = os.environ.get('CLOUD_RUN_HOSTNAME')
+        if not cloud_run_hostname:
+            print("❌ CLOUD_RUN_HOSTNAME environment variable not set")
+            print("🔄 Falling back to polling mode...")
+            application.run_polling()
+            return
+        
+        print(f"🌐 Cloud Run Hostname: {cloud_run_hostname}")
+        
+        # Run webhook directly using PTB's built-in webhook
         try:
-            while True:
-                import time
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("🛑 Bot stopped by user")
-            logger.info("Bot stopped by user")
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=int(os.environ.get("PORT", "8080")),
+                url_path="webhook",
+                webhook_url=f"https://{cloud_run_hostname}/webhook"
+            )
+        except Exception as e:
+            print(f"❌ Error starting webhook: {e}")
+            print("🔄 Falling back to polling mode...")
+            application.run_polling()
     else:
         print("🔄 Running locally - Using polling mode...")
         logger.info("Running locally - Using polling mode...")
