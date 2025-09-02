@@ -29,5 +29,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8080/health')" || exit 1
 
-# Run the bot
-CMD ["python", "telegram_bot.py"]
+# Run the bot with Gunicorn for production
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "300", "telegram_bot:app"]

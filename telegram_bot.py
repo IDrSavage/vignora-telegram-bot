@@ -1212,20 +1212,18 @@ def main():
     
     # Check if running on Cloud Run
     if os.environ.get('PORT'):
-        print("🌐 Running on Cloud Run - Starting Flask server...")
-        logger.info("Running on Cloud Run - Starting Flask server...")
-        print("📝 Note: Webhook will be configured by deployment script")
-        
-        # Start Flask directly in main thread for Cloud Run
+        print("🌐 Running on Cloud Run with Gunicorn...")
+        logger.info("Running on Cloud Run with Gunicorn...")
+        print("📝 Note: Flask will be started by Gunicorn")
+        # Don't start Flask here - Gunicorn will handle it
+        # Just keep the main thread alive for the bot
         try:
-            port = int(os.environ.get('PORT', 8080))
-            print(f"🌐 Starting Flask server on port {port}")
-            logger.info(f"Starting Flask server on port {port}")
-            app.run(host='0.0.0.0', port=port, debug=False)
-        except Exception as e:
-            print(f"❌ Error starting Flask server: {e}")
-            logger.error(f"Flask server error: {e}")
-            raise e
+            while True:
+                import time
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("🛑 Bot stopped by user")
+            logger.info("Bot stopped by user")
     else:
         print("🔄 Running locally - Using polling mode...")
         logger.info("Running locally - Using polling mode...")
