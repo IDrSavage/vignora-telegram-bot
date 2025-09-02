@@ -600,7 +600,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📚 **Question / السؤال:**\n"
         f"{question_data.get('question', 'No question')}\n\n"
         f"📊 **Remaining:** {remaining_questions} / {total_questions}\n\n"
-        f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\n\n' if SHOW_DATE_ADDED else ''}"
+        f"{'📅 **Added:** ' + format_timestamp(question_data.get('date_added')) + '\\n\\n' if SHOW_DATE_ADDED else ''}"
         "**Options / الخيارات:**"
     )
     
