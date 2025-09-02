@@ -1150,6 +1150,13 @@ def init_telegram_app():
             application.add_handler(CallbackQueryHandler(test_bot_permissions, pattern="^test_bot_permissions$"))
             application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
             
+            # Initialize the application for webhook mode
+            async def _startup():
+                await application.initialize()
+                await application.start()
+            
+            asyncio.run(_startup())
+            
             print("✅ Telegram application initialized successfully!")
             logger.info("Telegram application initialized successfully!")
         except Exception as e:
