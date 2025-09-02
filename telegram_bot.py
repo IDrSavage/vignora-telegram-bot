@@ -1224,9 +1224,8 @@ def webhook():
         update_data = request.get_json()
         update = Update.de_json(update_data, application.bot)
         
-        # Process the update on the same global loop where the application was initialized
-        _ensure_event_loop_running()
-        asyncio.run_coroutine_threadsafe(application.process_update(update), _event_loop)
+        # Schedule processing on the application's own loop to avoid loop mismatch
+        application.create_task(application.process_update(update))
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
