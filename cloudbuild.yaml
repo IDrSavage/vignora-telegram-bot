@@ -39,9 +39,6 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  _TELEGRAM_TOKEN: ''
-  _SUPABASE_URL: ''
-  _SUPABASE_KEY: ''
   _TELEGRAM_CHANNEL_ID: '@Vignora'
   _TELEGRAM_CHANNEL_LINK: 'https://t.me/Vignora'
   _CHANNEL_SUBSCRIPTION_REQUIRED: 'true'
