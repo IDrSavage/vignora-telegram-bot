@@ -1,68 +1,153 @@
-# Medical Questions Telegram Bot
+# Vignora Medical Questions Bot
 
-A Telegram bot for medical quiz questions built with Python and Supabase.
+بوت أسئلة طبية متخصص في طب الأسنان، مبني باستخدام Python و Telegram Bot API.
 
-## Features
+## المميزات
 
-- Interactive medical quiz questions
-- Multiple choice answers (A, B, C, D)
-- Immediate feedback with explanations
-- Supabase database integration
-- Bilingual interface (English/Arabic)
+- **أسئلة طبية متخصصة**: حالياً متوفر طب الأسنان، وسيتم إضافة باقي التخصصات قريباً
+- **نظام اختبار تفاعلي**: أسئلة متعددة الخيارات مع شرح مبسط
+- **تتبع الإحصائيات**: عرض إجمالي الأسئلة والإجابات الصحيحة والدقة
+- **منع التكرار**: لا يتم عرض نفس السؤال مرتين للمستخدم
+- **إدارة المستخدمين**: جمع بيانات المستخدمين وتتبع التفاعلات
+- **ويبهوك مدمج**: أداء سريع بدون تأخير باستخدام الويبهوك المدمج في PTB
 
-## Setup
+## المتطلبات
 
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+- Python 3.11+
+- حساب Telegram Bot
+- قاعدة بيانات Supabase
 
-2. **IMPORTANT: Create a `.env` file with your credentials:**
-   - Copy the example below
-   - Replace with your actual values
-   - **NEVER commit the .env file to Git**
+## التثبيت
 
-```bash
-# Create .env file with these variables:
-TELEGRAM_TOKEN=your_actual_bot_token_here
-SUPABASE_URL=your_actual_supabase_url_here
-SUPABASE_KEY=your_actual_supabase_key_here
-```
+1. **استنساخ المشروع**:
+   ```bash
+   git clone https://github.com/IDrSavage/vignora-telegram-bot.git
+   cd vignora-telegram-bot
+   ```
 
-3. Run the bot:
+2. **إنشاء ملف البيئة**:
+   ```bash
+   # إنشاء ملف .env
+   TELEGRAM_TOKEN=your_bot_token_here
+   SUPABASE_URL=your_supabase_url_here
+   SUPABASE_KEY=your_supabase_key_here
+   TELEGRAM_CHANNEL_ID=@Vignora
+   TELEGRAM_CHANNEL_LINK=https://t.me/Vignora
+   CHANNEL_SUBSCRIPTION_REQUIRED=true
+   ```
+
+3. **تثبيت المكتبات**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## التشغيل المحلي
+
 ```bash
 python telegram_bot.py
 ```
 
-## Security Notes
+## النشر على Google Cloud Run
 
-- ⚠️ **NEVER commit your .env file to Git**
-- ⚠️ **Keep your bot tokens private**
-- ⚠️ **The .env file is already in .gitignore**
+### 1. إعداد Cloud Build Trigger
 
-## Environment Variables
+في Google Cloud Console → Cloud Build → Triggers:
 
-The bot requires these environment variables:
-- `TELEGRAM_TOKEN` - Your Telegram Bot Token from @BotFather
-- `SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_KEY` - Your Supabase anon/public key
+- **الاسم**: `vignora-bot-trigger`
+- **Event**: Push to a branch
+- **Source**: GitHub repository + branch (main)
+- **Build configuration**: Cloud Build configuration file (yaml)
+- **File location**: `cloudbuild.yaml`
 
-## Database Schema
+### 2. إعداد المتغيرات (Substitutions)
 
-The bot expects a `questions` table with the following columns:
-- `id` - Question ID
-- `question` - Question text
-- `option_a`, `option_b`, `option_c`, `option_d` - Answer options
-- `correct_answer` - Correct answer (A, B, C, or D)
-- `explanation` - Simple explanation
+في نفس صفحة إنشاء التريجر، تحت Variables:
 
-## Usage
+```
+_TELEGRAM_TOKEN = توكن البوت
+_SUPABASE_URL = https://…supabase.co
+_SUPABASE_KEY = مفتاح سوبابيس
+_TELEGRAM_CHANNEL_ID = @Vignora
+_TELEGRAM_CHANNEL_LINK = https://t.me/Vignora
+_CHANNEL_SUBSCRIPTION_REQUIRED = true
+_CLOUD_RUN_HOSTNAME = vignora-bot-826012995194.us-central1.run.app
+```
 
-1. Start the bot with `/start`
-2. Click "Start Quiz" to begin
-3. Answer questions by selecting A, B, C, or D
-4. View explanations and continue to next question
+### 3. النشر التلقائي
 
-## Contributing
+بعد إعداد التريجر، كل `git push` سيؤدي إلى نشر تلقائي.
 
-Feel free to submit issues and enhancement requests!
+## بنية قاعدة البيانات
+
+### جدول الأسئلة (questions)
+```sql
+CREATE TABLE public.questions (
+    id SERIAL PRIMARY KEY,
+    question TEXT NOT NULL,
+    option_a TEXT NOT NULL,
+    option_b TEXT NOT NULL,
+    option_c TEXT NOT NULL,
+    option_d TEXT NOT NULL,
+    correct_answer CHAR(1) NOT NULL,
+    explanation TEXT NOT NULL,
+    date_added BIGINT NOT NULL
+);
+```
+
+### جدول المستخدمين (target_users)
+```sql
+CREATE TABLE public.target_users (
+    id SERIAL PRIMARY KEY,
+    telegram_id BIGINT UNIQUE NOT NULL,
+    username VARCHAR(255),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    phone_number VARCHAR(20) NOT NULL,
+    language_code VARCHAR(10),
+    joined_at TIMESTAMP DEFAULT NOW(),
+    last_interaction TIMESTAMP DEFAULT NOW()
+);
+```
+
+### جدول إجابات المستخدمين (user_answers_bot)
+```sql
+CREATE TABLE public.user_answers_bot (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES target_users(telegram_id),
+    question_id INTEGER REFERENCES questions(id),
+    selected_answer CHAR(1) NOT NULL,
+    correct_answer CHAR(1) NOT NULL,
+    is_correct BOOLEAN NOT NULL,
+    answered_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+## الملفات
+
+- `telegram_bot.py` - الكود الرئيسي للبوت
+- `requirements.txt` - مكتبات Python المطلوبة
+- `Dockerfile` - ملف Docker للنشر
+- `cloudbuild.yaml` - إعدادات Cloud Build
+- `.env` - متغيرات البيئة (يجب إنشاؤه محلياً)
+
+## التطوير
+
+### إضافة أسئلة جديدة
+
+1. إضافة السؤال في قاعدة البيانات
+2. التأكد من صحة التنسيق
+3. اختبار البوت محلياً
+
+### تعديل الواجهة
+
+- تعديل الرسائل في الدوال المناسبة
+- إضافة أزرار جديدة في `InlineKeyboardMarkup`
+- تعديل التصميم باستخدام Markdown
+
+## الدعم
+
+للمساعدة أو الإبلاغ عن مشاكل، يرجى فتح issue في GitHub.
+
+## الترخيص
+
+هذا المشروع مملوك لشركة Vignora.
