@@ -236,10 +236,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = user.id
     
     # التحقق من وجود المستخدم
-    user_exists = check_user_exists(telegram_id)
+    user_exists = await asyncio.to_thread(check_user_exists, telegram_id)
     if not user_exists:
         # المستخدم جديد - طلب رقم الجوال
-        context.user_data["new_user"] = True
         
         # إنشاء لوحة مفاتيح لطلب رقم الجوال
         keyboard = [[KeyboardButton("Share Phone Number / مشاركة رقم الجوال", request_contact=True)]]
@@ -271,7 +270,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contact = update.message.contact
     
     # حفظ بيانات المستخدم
-    success = save_user_data(
+    success = await asyncio.to_thread(save_user_data,
         telegram_id=user.id,
         username=user.username,
         first_name=user.first_name,
@@ -299,10 +298,10 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
     telegram_id = user.id
     
     # تحديث آخر تفاعل
-    update_last_interaction(telegram_id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, telegram_id))
     
     # جلب عدد الأسئلة المتاحة
-    total_questions = get_total_questions_count()
+    total_questions = await asyncio.to_thread(get_total_questions_count)
     
     intro_message = (
         "🎯 **مرحباً بك في بوت فيجنورا للأسئلة الطبية!**\n"
@@ -370,7 +369,7 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = user.id
     
     # تحديث آخر تفاعل
-    update_last_interaction(telegram_id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, telegram_id))
     
     # التحقق من الاشتراك في القناة
     if CHANNEL_SUBSCRIPTION_REQUIRED:
@@ -380,7 +379,7 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     
     # جلب عدد الأسئلة المتاحة
-    total_questions = get_total_questions_count()
+    total_questions = await asyncio.to_thread(get_total_questions_count)
     
     keyboard = [
         [InlineKeyboardButton("Start Quiz / بدء الاختبار", callback_data="quiz")],
@@ -411,7 +410,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user = query.from_user
-    update_last_interaction(user.id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
     
     # التحقق من الاشتراك في القناة
     if CHANNEL_SUBSCRIPTION_REQUIRED:
@@ -420,28 +419,34 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_subscription_required(update, context, is_new_user=False)
             return
 
-    # Optimized database call using an RPC function
-    stats = {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
-    answered_questions = []
-    try:
-        response = supabase.rpc('get_user_stats_and_answered_ids', {'p_user_id': user.id}).execute()
-        stats_data = response.data[0] if response.data and response.data[0].get('total_answers') is not None else None
+    def get_stats_and_questions():
+        """Wrapper function to run multiple sync DB calls in one thread."""
+        # Optimized database call using an RPC function
+        stats = {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
+        answered_questions = []
+        try:
+            response = supabase.rpc('get_user_stats_and_answered_ids', {'p_user_id': user.id}).execute()
+            stats_data = response.data[0] if response.data and response.data[0].get('total_answers') is not None else None
 
-        if stats_data:
-            total = stats_data.get('total_answers', 0)
-            correct = stats_data.get('correct_answers', 0)
-            answered_questions = stats_data.get('answered_ids', []) or [] # Ensure it's a list
-            accuracy = (correct / total) * 100 if total > 0 else 0
-            stats = {
-                'total_answers': total,
-                'correct_answers': correct,
-                'accuracy': round(accuracy, 1)
-            }
-    except Exception as e:
-        logger.error("Could not fetch optimized user stats for user %s: %s", user.id, e)
+            if stats_data:
+                total = stats_data.get('total_answers', 0)
+                correct = stats_data.get('correct_answers', 0)
+                answered_questions = stats_data.get('answered_ids', []) or [] # Ensure it's a list
+                accuracy = (correct / total) * 100 if total > 0 else 0
+                stats = {
+                    'total_answers': total,
+                    'correct_answers': correct,
+                    'accuracy': round(accuracy, 1)
+                }
+        except Exception as e:
+            logger.error("Could not fetch optimized user stats for user %s: %s", user.id, e)
+        
+        total_questions = get_total_questions_count()
+        return stats, answered_questions, total_questions
+
+    stats, answered_questions, total_questions = await asyncio.to_thread(get_stats_and_questions)
 
     # جلب عدد الأسئلة الكلي والمتبقية
-    total_questions = get_total_questions_count()
     remaining_questions = total_questions - len(answered_questions)
     
     stats_message = (
@@ -564,7 +569,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # تحديث آخر تفاعل
     user = query.from_user
-    update_last_interaction(user.id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
     
     # التحقق من الاشتراك في القناة
     if CHANNEL_SUBSCRIPTION_REQUIRED:
@@ -573,9 +578,13 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_subscription_required(update, context, is_new_user=False)
             return
     
-    # جلب عدد الأسئلة المتاحة
-    total_questions = get_total_questions_count()
-    answered_questions = get_user_answered_questions(user.id)
+    def get_question_prerequisites():
+        """Wrapper to run sync DB calls in one thread."""
+        total = get_total_questions_count()
+        answered = get_user_answered_questions(user.id)
+        return total, answered
+
+    total_questions, answered_questions = await asyncio.to_thread(get_question_prerequisites)
     remaining_questions = total_questions - len(answered_questions)
     
     # التحقق من حد 10 أسئلة للمستخدمين الجدد
@@ -586,7 +595,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_subscription_required(update, context, is_new_user=True)
             return
     
-    question_data = fetch_random_question(user.id, answered_ids=answered_questions)
+    question_data = await asyncio.to_thread(fetch_random_question, user.id, answered_ids=answered_questions)
     if not question_data:
         # التحقق من سبب عدم وجود أسئلة
         if answered_questions and len(answered_questions) > 0:
@@ -653,7 +662,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # تحديث آخر تفاعل
     user = query.from_user
-    update_last_interaction(user.id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
     
     # التحقق من وجود بيانات السؤال
     if "current_question" not in context.user_data:
@@ -672,7 +681,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_correct = selected_answer == correct_answer
     
     # حفظ إجابة المستخدم
-    save_user_answer(user.id, question_id, selected_answer, correct_answer, is_correct)
+    await asyncio.to_thread(save_user_answer, user.id, question_id, selected_answer, correct_answer, is_correct)
     
     # إنشاء رسالة النتيجة والأزرار باستخدام الدالة المساعدة
     result_message, reply_markup = await _create_result_message_and_keyboard(context)
@@ -725,7 +734,7 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user = query.from_user
-    update_last_interaction(user.id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
     
     # التحقق من وجود بيانات السؤال
     if "current_question" not in context.user_data:
@@ -761,7 +770,7 @@ async def handle_report_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     
     user = query.from_user
-    update_last_interaction(user.id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
     
     # استخراج نوع البلاغ ومعرف السؤال
     callback_data = query.data
@@ -785,7 +794,7 @@ async def handle_report_reason(update: Update, context: ContextTypes.DEFAULT_TYP
     report_reason = report_reasons.get(report_type, 'Other / أخرى')
     
     # حفظ البلاغ
-    success = report_question(user.id, question_id, report_reason)
+    success = await asyncio.to_thread(report_question, user.id, question_id, report_reason)
     
     if success:
         success_message = (
@@ -1060,7 +1069,7 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     user = query.from_user
-    update_last_interaction(user.id)
+    asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
     
     # التحقق من الاشتراك
     is_subscribed = await check_channel_subscription(user.id, context.bot)
@@ -1158,7 +1167,7 @@ logger.info("🚀 Initializing Bot Application...")
 try:
     validate_environment()
     logger.info("Environment variables validated successfully.")
-    logger.info("Supabase URL: %s", SUPABASE_URL)
+    logger.info("Supabase URL is set.") # Changed for security/clarity
 except ValueError as e:
     logger.critical("Missing required environment variable: %s. Bot cannot start.", e)
     raise e  # Stop the application from starting
