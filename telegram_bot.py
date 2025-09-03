@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 from flask import Flask, request, jsonify
 
 # تحميل متغيرات البيئة
-load_dotenv()
 
 # تعيين المتغيرات الثابتة - مطلوبة من ملف .env
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
