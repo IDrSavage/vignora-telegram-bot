@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/vignora-bot', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/vignora-telegram-bot:$COMMIT_SHA', '.']
 
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/vignora-bot']
+    args: ['push', 'gcr.io/$PROJECT_ID/vignora-telegram-bot:$COMMIT_SHA']
 
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -13,9 +13,9 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'vignora-bot'
+      - 'vignora-telegram-bot' # <-- تم تعديل اسم الخدمة هنا
       - '--image'
-      - 'gcr.io/$PROJECT_ID/vignora-bot'
+      - 'gcr.io/$PROJECT_ID/vignora-telegram-bot:$COMMIT_SHA'
       - '--region'
       - '${_REGION}'
       - '--platform'
@@ -29,7 +29,7 @@ steps:
       - '--set-secrets=TELEGRAM_TOKEN=_TELEGRAM_TOKEN:latest,SUPABASE_URL=_SUPABASE_URL:latest,SUPABASE_KEY=_SUPABASE_KEY:latest'
 
 images:
-  - 'gcr.io/$PROJECT_ID/vignora-bot:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/vignora-telegram-bot:$COMMIT_SHA'
 
 options:
   logging: CLOUD_LOGGING_ONLY
