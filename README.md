@@ -60,7 +60,13 @@ python telegram_bot.py
     -   `vignora-telegram-token`
     -   `vignora-supabase-url`
     -   `vignora-supabase-key`
-3.  تأكد من منح صلاحية **Secret Manager Secret Accessor** لحساب خدمة Cloud Build (عادة يكون `[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`).
+3.  اذهب إلى **IAM & Admin** → **IAM**.
+4.  ابحث عن حساب خدمة **Cloud Build** (عادة `[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`) وامنحه صلاحية `Secret Manager Secret Accessor`.
+5.  امنح نفس الصلاحية لحساب خدمة **Cloud Run**. للعثور عليه:
+    -   اذهب إلى **Cloud Run** وانقر على خدمتك (`vignora-bot`).
+    -   اذهب إلى تبويب **Security**.
+    -   انسخ البريد الإلكتروني الموجود تحت **Service account**. سيكون على هذا الشكل: `[PROJECT_NUMBER]-compute@developer.gserviceaccount.com`.
+    -   عد إلى صفحة **IAM** وامنح هذا الحساب صلاحية `Secret Manager Secret Accessor`. هذا هو الحساب الذي تستخدمه خدمتك للوصول إلى الأسرار.
 
 ### 2. إعداد Cloud Build Trigger
 
@@ -91,7 +97,7 @@ CREATE TABLE public.questions (
     option_d TEXT NOT NULL,
     correct_answer CHAR(1) NOT NULL,
     explanation TEXT NOT NULL,
-    date_added BIGINT NOT NULL
+    date_added TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 ```
 
@@ -119,7 +125,9 @@ CREATE TABLE public.user_answers_bot (
     selected_answer CHAR(1) NOT NULL,
     correct_answer CHAR(1) NOT NULL,
     is_correct BOOLEAN NOT NULL,
-    answered_at TIMESTAMP DEFAULT NOW()
+    answered_at TIMESTAMP DEFAULT NOW(),
+    is_reported BOOLEAN DEFAULT FALSE,
+    report_reason TEXT
 );
 ```
 
