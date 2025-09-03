@@ -2,6 +2,7 @@ import os
 import asyncio
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from threading import Thread
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -46,15 +47,17 @@ def validate_environment():
     return True
 
 def format_timestamp(timestamp):
-    """تحويل Unix timestamp إلى تاريخ مفهوم"""
+    """Formats an ISO 8601 timestamp string from Supabase into a readable date."""
     try:
-        if timestamp:
-            # تحويل Unix timestamp إلى datetime
-            dt = datetime.fromtimestamp(int(timestamp))
-            # تنسيق التاريخ باللغة العربية والإنجليزية
-            return dt.strftime("%Y-%m-%d %H:%M")
-        return "Unknown"
-    except (ValueError, TypeError, OSError):
+        # Supabase returns TIMESTAMPTZ as an ISO 8601 string.
+        # Example: '2024-09-03T10:00:00+00:00'
+        if not timestamp or not isinstance(timestamp, str):
+            return "Unknown"
+        
+        # Parse the ISO 8601 string into a datetime object.
+        dt = datetime.fromisoformat(timestamp)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
         return "Unknown"
 
 def check_user_exists(telegram_id: int):
@@ -1090,10 +1093,18 @@ def webhook():
     try:
         # Get the update from Telegram
         update_data = request.get_json()
-        
-        # Process the update asynchronously
-        asyncio.run(process_update(update_data))
-        
+
+        def run_in_thread(data):
+            """Runs the async task in a new event loop in a new thread."""
+            # This is essential because each thread needs its own event loop
+            # when using asyncio.run()
+            asyncio.run(process_update(data))
+
+        # Run the bot logic in a separate thread to avoid blocking the webhook response.
+        # This immediately returns a 200 OK to Telegram and prevents Gunicorn worker timeouts.
+        thread = Thread(target=run_in_thread, args=(update_data,))
+        thread.start()
+
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
         logger.error("Error in webhook endpoint: %s", e, exc_info=True)
