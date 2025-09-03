@@ -37,13 +37,17 @@ application = None
 supabase: Client = None
 
 def validate_environment():
-    """التحقق من وجود المتغيرات المطلوبة"""
-    if not TELEGRAM_TOKEN:
-        raise ValueError("TELEGRAM_TOKEN is required in environment variables")
-    if not SUPABASE_URL:
-        raise ValueError("SUPABASE_URL is required in environment variables")
-    if not SUPABASE_KEY:
-        raise ValueError("SUPABASE_KEY is required in environment variables")
+    """Checks for required environment variables and raises a single, comprehensive error if any are missing."""
+    required_vars = {
+        "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_KEY": SUPABASE_KEY,
+    }
+    
+    missing_vars = [name for name, value in required_vars.items() if not value]
+    
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
     return True
 
 def format_timestamp(timestamp):

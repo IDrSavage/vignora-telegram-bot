@@ -26,7 +26,7 @@ steps:
       # Set non-secret environment variables
       - '--set-env-vars=TELEGRAM_CHANNEL_ID=${_TELEGRAM_CHANNEL_ID},TELEGRAM_CHANNEL_LINK=${_TELEGRAM_CHANNEL_LINK},CHANNEL_SUBSCRIPTION_REQUIRED=${_CHANNEL_SUBSCRIPTION_REQUIRED}'
       # Set secrets from Secret Manager
-      - '--set-secrets=TELEGRAM_TOKEN=vignora-telegram-token:latest,SUPABASE_URL=vignora-supabase-url:latest,SUPABASE_KEY=vignora-supabase-key:latest'
+      - '--set-secrets=TELEGRAM_TOKEN=_TELEGRAM_TOKEN:latest,SUPABASE_URL=_SUPABASE_URL:latest,SUPABASE_KEY=_SUPABASE_KEY:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/vignora-bot:$COMMIT_SHA'

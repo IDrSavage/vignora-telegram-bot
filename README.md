@@ -57,9 +57,12 @@ python telegram_bot.py
 
 1.  اذهب إلى **Secret Manager** في Google Cloud Console.
 2.  أنشئ الأسرار (Secrets) التالية وضع القيم الحقيقية بداخلها:
-    -   `vignora-telegram-token`
-    -   `vignora-supabase-url`
-    -   `vignora-supabase-key`
+    -   `_TELEGRAM_TOKEN`
+    -   `_SUPABASE_URL`
+    -   `_SUPABASE_KEY`
+    **ملاحظة هامة جداً:**
+    - **اسم السر (Secret Name)** في Secret Manager يجب أن يكون مطابقاً تماماً للأسماء المستخدمة في ملف `cloudbuild.yaml`.
+    - **اسم متغير البيئة (Environment Variable)** الذي يستخدمه الكود هو شيء مختلف (مثلاً، `TELEGRAM_TOKEN`).
 3.  اذهب إلى **IAM & Admin** → **IAM**.
 4.  ابحث عن حساب خدمة **Cloud Build** (عادة `[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`) وامنحه صلاحية `Secret Manager Secret Accessor`.
 5.  امنح نفس الصلاحية لحساب خدمة **Cloud Run**. للعثور عليه:
