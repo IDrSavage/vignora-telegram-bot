@@ -177,12 +177,15 @@ def get_total_questions_count():
         logger.warning("Could not get total questions count: %s", e)
         return 0
 
-def fetch_random_question(telegram_id: int = None):
+def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
     """جلب أحدث سؤال من قاعدة البيانات (غير مجاب عليه من قبل المستخدم)"""
     try:
         # إذا كان هناك معرف مستخدم، نستثني الأسئلة المجاب عليها
         if telegram_id:
-            answered_ids = get_user_answered_questions(telegram_id)
+            # If answered_ids are not provided, fetch them. This avoids double-fetching.
+            if answered_ids is None:
+                answered_ids = get_user_answered_questions(telegram_id)
+
             logger.info("User %s has answered %s questions. Excluding them.", telegram_id, len(answered_ids))
             # Call the RPC function to get a truly random question, excluding answered ones.
             response = supabase.rpc('get_random_question', {'p_exclude_ids': answered_ids}).execute()
@@ -195,7 +198,7 @@ def fetch_random_question(telegram_id: int = None):
             logger.info("Fetched question_id %s for user %s", question.get('id'), telegram_id)
             return question
         else:
-            if telegram_id and get_user_answered_questions(telegram_id):
+            if telegram_id and answered_ids:
                 logger.info("User %s has answered all available questions", telegram_id)
             else:
                 logger.warning("No questions found in database for fetch_random_question.")
@@ -412,12 +415,29 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_subscribed:
             await show_subscription_required(update, context, is_new_user=False)
             return
-    
-    stats = get_user_stats(user.id)
-    
+
+    # Optimized database call using an RPC function
+    stats = {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
+    answered_questions = []
+    try:
+        response = supabase.rpc('get_user_stats_and_answered_ids', {'p_user_id': user.id}).execute()
+        stats_data = response.data[0] if response.data and response.data[0].get('total_answers') is not None else None
+
+        if stats_data:
+            total = stats_data.get('total_answers', 0)
+            correct = stats_data.get('correct_answers', 0)
+            answered_questions = stats_data.get('answered_ids', []) or [] # Ensure it's a list
+            accuracy = (correct / total) * 100 if total > 0 else 0
+            stats = {
+                'total_answers': total,
+                'correct_answers': correct,
+                'accuracy': round(accuracy, 1)
+            }
+    except Exception as e:
+        logger.error("Could not fetch optimized user stats for user %s: %s", user.id, e)
+
     # جلب عدد الأسئلة الكلي والمتبقية
     total_questions = get_total_questions_count()
-    answered_questions = get_user_answered_questions(user.id)
     remaining_questions = total_questions - len(answered_questions)
     
     stats_message = (
@@ -562,7 +582,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_subscription_required(update, context, is_new_user=True)
             return
     
-    question_data = fetch_random_question(user.id)
+    question_data = fetch_random_question(user.id, answered_ids=answered_questions)
     if not question_data:
         # التحقق من سبب عدم وجود أسئلة
         if answered_questions and len(answered_questions) > 0:

@@ -17,7 +17,7 @@ steps:
       - '--image'
       - 'gcr.io/$PROJECT_ID/vignora-bot'
       - '--region'
-      - 'us-central1'
+      - '${_REGION}'
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
@@ -35,6 +35,7 @@ options:
   logging: CLOUD_LOGGING_ONLY
 # Substitutions for non-secret values
 substitutions:
+  _REGION: "asia-south1" # <-- Your actual Cloud Run region
   _TELEGRAM_CHANNEL_ID: "@Vignora"
   _TELEGRAM_CHANNEL_LINK: "https://t.me/Vignora"
   _CHANNEL_SUBSCRIPTION_REQUIRED: "true"
