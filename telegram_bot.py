@@ -1,13 +1,20 @@
 import os
 import asyncio
 from datetime import datetime
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
+
+# Configure logging to integrate with Cloud Run's logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 from flask import Flask, request, jsonify
-import threading
 
 # تحميل متغيرات البيئة
 load_dotenv()
@@ -20,20 +27,13 @@ TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Vignora")
 TELEGRAM_CHANNEL_LINK = os.getenv("TELEGRAM_CHANNEL_LINK", "https://t.me/Vignora")
 CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "true").lower() == "true"
 
-# إنشاء عميل Supabase
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("✅ Supabase client created successfully")
-except Exception as e:
-    print(f"⚠️ Warning: Could not create Supabase client: {e}")
-    print("⚠️ Bot will run with limited functionality")
-    supabase = None
-
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
 
 # متغير عام للتطبيق (مطلوب للويبهوك)
 application = None
+# متغير عام لعميل Supabase
+supabase: Client = None
 
 def validate_environment():
     """التحقق من وجود المتغيرات المطلوبة"""
@@ -63,7 +63,7 @@ def check_user_exists(telegram_id: int):
         response = supabase.table('target_users').select('telegram_id').eq('telegram_id', telegram_id).execute()
         return len(response.data) > 0
     except Exception as e:
-        print(f"⚠️ Warning: Could not check user existence: {e}")
+        logger.warning("Could not check user existence for telegram_id %s: %s", telegram_id, e)
         # في حالة فشل الاتصال، نفترض أن المستخدم جديد
         return False
 
@@ -82,10 +82,10 @@ def save_user_data(telegram_id: int, username: str, first_name: str, last_name: 
         }
         
         response = supabase.table('target_users').insert(user_data).execute()
-        print(f"✅ User saved successfully: {telegram_id}")
+        logger.info("User saved successfully: %s", telegram_id)
         return True
     except Exception as e:
-        print(f"⚠️ Warning: Could not save user data: {e}")
+        logger.warning("Could not save user data for telegram_id %s: %s", telegram_id, e)
         # في حالة فشل الحفظ، نسمح للمستخدم بالمتابعة
         return True
 
@@ -97,7 +97,7 @@ def update_last_interaction(telegram_id: int):
     try:
         supabase.table('target_users').update({'last_interaction': 'now()'}).eq('telegram_id', telegram_id).execute()
     except Exception as e:
-        print(f"⚠️ Warning: Could not update last interaction: {e}")
+        logger.warning("Could not update last interaction for telegram_id %s: %s", telegram_id, e)
         # لا نوقف البوت بسبب فشل تحديث آخر تفاعل
 
 def save_user_answer(telegram_id: int, question_id: int, selected_answer: str, correct_answer: str, is_correct: bool):
@@ -113,10 +113,10 @@ def save_user_answer(telegram_id: int, question_id: int, selected_answer: str, c
         }
         
         response = supabase.table('user_answers_bot').insert(answer_data).execute()
-        print(f"✅ User answer saved: User {telegram_id}, Question {question_id}, Correct: {is_correct}")
+        logger.info("User answer saved: User %s, Question %s, Correct: %s", telegram_id, question_id, is_correct)
         return True
     except Exception as e:
-        print(f"⚠️ Warning: Could not save user answer: {e}")
+        logger.warning("Could not save user answer for telegram_id %s: %s", telegram_id, e)
         return False
 
 def get_user_stats(telegram_id: int):
@@ -127,16 +127,16 @@ def get_user_stats(telegram_id: int):
             total_answers = len(response.data)
             correct_answers = sum(1 for answer in response.data if answer['is_correct'])
             accuracy = (correct_answers / total_answers) * 100 if total_answers > 0 else 0
-            print(f"✅ User {telegram_id} stats: {total_answers} total, {correct_answers} correct, {accuracy}% accuracy")
+            logger.info("User %s stats: %s total, %s correct, %s%% accuracy", telegram_id, total_answers, correct_answers, round(accuracy, 1))
             return {
                 'total_answers': total_answers,
                 'correct_answers': correct_answers,
                 'accuracy': round(accuracy, 1)
             }
-        print(f"✅ User {telegram_id} has no stats yet")
+        logger.info("User %s has no stats yet", telegram_id)
         return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch user stats: {e}")
+        logger.warning("Could not fetch user stats for telegram_id %s: %s", telegram_id, e)
         return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
 
 def get_user_answered_questions(telegram_id: int):
@@ -146,12 +146,12 @@ def get_user_answered_questions(telegram_id: int):
         response = supabase.table('user_answers_bot').select('question_id', count='exact').eq('user_id', telegram_id).execute()
         if response.data:
             count = len(response.data)
-            print(f"✅ User {telegram_id} answered {count} questions")
+            logger.info("User %s answered %s questions", telegram_id, count)
             return [answer['question_id'] for answer in response.data]
-        print(f"✅ User {telegram_id} answered 0 questions")
+        logger.info("User %s answered 0 questions", telegram_id)
         return []
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch user answers: {e}")
+        logger.warning("Could not fetch user answers for telegram_id %s: %s", telegram_id, e)
         return []
 
 def get_total_questions_count():
@@ -160,18 +160,18 @@ def get_total_questions_count():
         # محاولة استخدام count
         response = supabase.table('questions').select('*', count='exact').execute()
         if hasattr(response, 'count') and response.count is not None:
-            print(f"✅ Got exact count: {response.count}")
+            logger.info("Got exact question count from Supabase: %s", response.count)
             return response.count
         
         # إذا فشل count، نجرب طريقة أخرى
-        print("⚠️ Count method failed, trying alternative...")
+        logger.warning("Supabase count method failed, trying alternative length-based count.")
         response = supabase.table('questions').select('id').execute()
         count = len(response.data)
-        print(f"✅ Got count from data length: {count}")
+        logger.info("Got question count from data length: %s", count)
         return count
         
     except Exception as e:
-        print(f"⚠️ Warning: Could not get total questions count: {e}")
+        logger.warning("Could not get total questions count: %s", e)
         return 0
 
 def fetch_random_question(telegram_id: int = None):
@@ -179,39 +179,27 @@ def fetch_random_question(telegram_id: int = None):
     try:
         # إذا كان هناك معرف مستخدم، نستثني الأسئلة المجاب عليها
         if telegram_id:
-            answered_questions = get_user_answered_questions(telegram_id)
-            print(f"📊 User {telegram_id} has answered {len(answered_questions)} questions")
-            
-            # استعلام لجلب أحدث سؤال غير مجاب عليه
-            if answered_questions:
-                # استخدام not in مع limit للحصول على سؤال عشوائي
-                response = supabase.table('questions').select(
-                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
-                ).not_.in_('id', answered_questions).order('date_added', desc=True).limit(1).execute()
-            else:
-                # المستخدم لم يجب على أي سؤال بعد - جلب أحدث سؤال
-                response = supabase.table('questions').select(
-                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
-                ).order('date_added', desc=True).limit(1).execute()
+            answered_ids = get_user_answered_questions(telegram_id)
+            logger.info("User %s has answered %s questions. Excluding them.", telegram_id, len(answered_ids))
+            # Call the RPC function to get a truly random question, excluding answered ones.
+            response = supabase.rpc('get_random_question', {'p_exclude_ids': answered_ids}).execute()
         else:
-            # بدون معرف مستخدم - جلب أحدث سؤال
-            response = supabase.table('questions').select(
-                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
-            ).order('date_added', desc=True).limit(1).execute()
+            # For a non-user context, get any random question.
+            response = supabase.rpc('get_random_question', {'p_exclude_ids': []}).execute()
         
         if response.data and len(response.data) > 0:
             question = response.data[0]
-            print(f"📅 Question {question.get('id')} from date: {question.get('date_added')}")
+            logger.info("Fetched question_id %s for user %s", question.get('id'), telegram_id)
             return question
         else:
-            if telegram_id and answered_questions:
-                print(f"⚠️ User {telegram_id} has answered all available questions")
+            if telegram_id and get_user_answered_questions(telegram_id):
+                logger.info("User %s has answered all available questions", telegram_id)
             else:
-                print("⚠️ Warning: No questions found in database")
+                logger.warning("No questions found in database for fetch_random_question.")
             return None
             
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch question: {e}")
+        logger.warning("Could not fetch question: %s", e)
         return None
 
 def get_latest_questions(limit: int = 10):
@@ -222,14 +210,14 @@ def get_latest_questions(limit: int = 10):
         ).order('date_added', desc=True).limit(limit).execute()
         
         if response.data:
-            print(f"📅 Fetched {len(response.data)} latest questions")
+            logger.info("Fetched %s latest questions", len(response.data))
             return response.data
         else:
-            print("⚠️ No questions found")
+            logger.warning("No questions found when fetching latest questions.")
             return []
             
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch latest questions: {e}")
+        logger.warning("Could not fetch latest questions: %s", e)
         return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,7 +275,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "تم حفظ معلوماتك بنجاح.\n"
             "Your information has been saved successfully.",
-            reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardRemove()
         )
         
         # عرض مقدمة البوت مباشرة
@@ -654,11 +642,19 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # حفظ إجابة المستخدم
     save_user_answer(user.id, question_id, selected_answer, correct_answer, is_correct)
     
-    # إنشاء رسالة النتيجة
-    if is_correct:
+    # إنشاء رسالة النتيجة والأزرار باستخدام الدالة المساعدة
+    result_message, reply_markup = await _create_result_message_and_keyboard(context)
+    await query.edit_message_text(result_message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def _create_result_message_and_keyboard(context: ContextTypes.DEFAULT_TYPE):
+    """Helper function to create the result message and keyboard after an answer."""
+    selected_answer = context.user_data.get("last_selected_answer", "")
+    correct_answer = context.user_data["current_question"]["correct_answer"]
+    explanation = context.user_data["current_question"]["explanation"]
+    
+    if selected_answer == correct_answer:
         result_message = "✅ إجابة صحيحة!\nCorrect answer!\n\n"
     else:
-        # عرض الإجابة الصحيحة كاملة
         correct_answer_text = ""
         question_data = context.user_data.get("current_question_data", {})
         if question_data:
@@ -678,13 +674,11 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{correct_answer_text}\n\n"
         )
     
-    # إضافة الشرح المبسط فقط
     if explanation:
         result_message += f"**Explanation / الشرح:**\n{explanation}"
     else:
         result_message += "**No explanation available / لا يوجد شرح متاح**"
     
-    # أزرار التحكم - زر التالي وزر إنهاء الجلسة وزر الإبلاغ
     keyboard = [
         [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
         [InlineKeyboardButton("🚨 Report Question / الإبلاغ عن السؤال", callback_data="report")],
@@ -692,8 +686,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(result_message, reply_markup=reply_markup, parse_mode='Markdown')
-
+    return result_message, reply_markup
 async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الإبلاغ عن السؤال"""
     query = update.callback_query
@@ -804,49 +797,8 @@ async def back_to_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # إعادة عرض الإجابة مع الأزرار
     if "current_question" in context.user_data:
-        # إعادة إنشاء رسالة النتيجة
-        selected_answer = context.user_data.get("last_selected_answer", "")
-        correct_answer = context.user_data["current_question"]["correct_answer"]
-        explanation = context.user_data["current_question"]["explanation"]
-        
-        # إنشاء رسالة النتيجة
-        if selected_answer == correct_answer:
-            result_message = "✅ إجابة صحيحة!\nCorrect answer!\n\n"
-        else:
-            # عرض الإجابة الصحيحة كاملة
-            correct_answer_text = ""
-            question_data = context.user_data.get("current_question_data", {})
-            if question_data:
-                if correct_answer == "A":
-                    correct_answer_text = f"A: {question_data.get('option_a', '')}"
-                elif correct_answer == "B":
-                    correct_answer_text = f"B: {question_data.get('option_b', '')}"
-                elif correct_answer == "C":
-                    correct_answer_text = f"C: {question_data.get('option_c', '')}"
-                elif correct_answer == "D":
-                    correct_answer_text = f"D: {question_data.get('option_d', '')}"
-            
-            result_message = (
-                f"❌ إجابة خاطئة\n"
-                f"Wrong answer\n\n"
-                f"**Correct Answer / الإجابة الصحيحة:**\n"
-                f"{correct_answer_text}\n\n"
-            )
-        
-        # إضافة الشرح
-        if explanation:
-            result_message += f"**Explanation / الشرح:**\n{explanation}"
-        else:
-            result_message += "**No explanation available / لا يوجد شرح متاح**"
-        
-        # أزرار التحكم
-        keyboard = [
-            [InlineKeyboardButton("Next Question / السؤال التالي", callback_data="quiz")],
-            [InlineKeyboardButton("🚨 Report Question / الإبلاغ عن السؤال", callback_data="report")],
-            [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
+        # إعادة إنشاء رسالة النتيجة والأزرار باستخدام الدالة المساعدة
+        result_message, reply_markup = await _create_result_message_and_keyboard(context)
         await query.edit_message_text(result_message, reply_markup=reply_markup, parse_mode='Markdown')
     else:
         await query.edit_message_text("عذراً، لا يمكن العودة إلى الإجابة.")
@@ -995,10 +947,10 @@ def report_question(user_id: int, question_id: int, report_reason: str):
             'report_reason': report_reason
         }).eq('user_id', user_id).eq('question_id', question_id).execute()
         
-        print(f"✅ Question {question_id} reported by user {user_id}: {report_reason}")
+        logger.info("Question %s reported by user %s: %s", question_id, user_id, report_reason)
         return True
     except Exception as e:
-        print(f"⚠️ Warning: Could not report question: {e}")
+        logger.warning("Could not report question %s for user %s: %s", question_id, user_id, e)
         return False
 
 async def check_channel_subscription(user_id: int, bot):
@@ -1015,14 +967,14 @@ async def check_channel_subscription(user_id: int, bot):
         
         # الحالات المقبولة: member, administrator, creator
         if member.status in ['member', 'administrator', 'creator']:
-            print(f"✅ User {user_id} is subscribed to channel @{channel_id}")
+            logger.info("User %s is subscribed to channel @%s", user_id, channel_id)
             return True
         else:
-            print(f"❌ User {user_id} is not subscribed to channel @{channel_id} (status: {member.status})")
+            logger.warning("User %s is NOT subscribed to channel @%s (status: %s)", user_id, channel_id, member.status)
             return False
             
     except Exception as e:
-        print(f"⚠️ Warning: Could not check channel subscription for user {user_id}: {e}")
+        logger.error("Could not check channel subscription for user %s: %s", user_id, e)
         # في حالة الخطأ، نفترض أن المستخدم مشترك (لعدم إيقاف البوت)
         return True
 
@@ -1139,14 +1091,14 @@ def webhook():
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
-        logging.error(f"Webhook error: {e}")
+        logger.error("Error in webhook endpoint: %s", e, exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 async def process_update(update_data):
     """Process Telegram update asynchronously"""
     try:
         if application is None:
-            logging.error("Application is not initialized yet.")
+            logger.error("Application object is not initialized. Cannot process update.")
             return
         
         # Create update object
@@ -1155,77 +1107,64 @@ async def process_update(update_data):
         # Process the update
         await application.process_update(update)
     except Exception as e:
-        logging.error(f"Error processing update: {e}")
+        logger.error("Error processing update: %s", e, exc_info=True)
 
-def run_flask():
-    """Run Flask app"""
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False)
+# --- Bot and Supabase Initialization ---
+# This code runs once when the module is imported by Gunicorn.
 
-def main():
-    """الدالة الرئيسية لتشغيل البوت"""
-    global application
-    
-    print("🚀 Starting Medical Questions Bot...")
-    
-    # Check if running on Cloud Run
-    if os.environ.get('PORT'):
-        print("🌐 Running on Cloud Run - Starting Flask server...")
-        print("📝 Note: Webhook will be configured by deployment script")
-        
-        # For Cloud Run, we'll validate environment when needed
-        # but don't fail immediately to allow Flask to start
-        if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
-            print("⚠️ Warning: Some environment variables are missing")
-            print("⚠️ Bot functionality will be limited until variables are set")
-        
-        # Run Flask app
-        run_flask()
+logger.info("🚀 Initializing Bot Application...")
+
+# 1. Validate environment variables
+try:
+    validate_environment()
+    logger.info("Environment variables validated successfully.")
+    logger.info("Supabase URL: %s", SUPABASE_URL)
+except ValueError as e:
+    logger.critical("Missing required environment variable: %s. Bot cannot start.", e)
+    raise e  # Stop the application from starting
+
+# 2. Initialize Supabase client
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logger.info("Supabase client created successfully.")
+except Exception as e:
+    logger.critical("Could not create Supabase client: %s. Bot cannot start.", e)
+    raise e  # Stop the application from starting
+
+# 3. Build the Telegram bot application and add handlers
+application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
+application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
+application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
+application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
+application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
+application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
+application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
+application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
+application.add_handler(CommandHandler("test_count", test_count))
+application.add_handler(CommandHandler("db_info", db_info))
+application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
+application.add_handler(CallbackQueryHandler(show_about, pattern="^about$"))
+
+logger.info("✅ Bot application initialized successfully with all handlers.")
+
+
+def main_polling():
+    """Main function for local execution (polling mode)."""
+    logger.info("No PORT environment variable. Running in polling mode.")
+    if CHANNEL_SUBSCRIPTION_REQUIRED:
+        logger.info("Channel subscription check is ENABLED.")
     else:
-        print("🔄 Running locally - Using polling mode...")
-        
-        # Validate environment for local polling mode
-        try:
-            validate_environment()
-            print(f"📡 Supabase URL: {SUPABASE_URL}")
-            print(f"🤖 Telegram Token: {TELEGRAM_TOKEN[:20]}...")
-            
-            # معلومات القناة
-            if CHANNEL_SUBSCRIPTION_REQUIRED:
-                print(f"📢 Channel Subscription Required: YES")
-                print(f"📢 Channel ID: {TELEGRAM_CHANNEL_ID}")
-                print(f"🔗 Channel Link: {TELEGRAM_CHANNEL_LINK}")
-            else:
-                print(f"📢 Channel Subscription Required: NO")
-            
-            # إنشاء التطبيق
-            application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-            
-            # إضافة معالجات الأوامر
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-            application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
-            application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
-            application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-            application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
-            application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
-            application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
-            application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
-            application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
-            application.add_handler(CommandHandler("test_count", test_count))
-            application.add_handler(CommandHandler("db_info", db_info))
-            application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
-            application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
-            
-            # تشغيل البوت
-            print("✅ Bot is running and ready to receive messages!")
-            print("📱 Users can now start the bot with /start")
-            
-            application.run_polling()
-        except ValueError as e:
-            print(f"❌ Error: {e}")
-            print("❌ Please check your .env file and ensure all required variables are set")
-            return
+        logger.info("Channel subscription check is DISABLED.")
+
+    logger.info("Bot is running and ready to receive messages via polling.")
+    application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # This block is for local development only.
+    # Gunicorn does not run this.
+    main_polling()

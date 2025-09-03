@@ -1,37 +1,21 @@
-# Use Python 3.11 slim image for better compatibility
+# استخدم نسخة بايثون رسمية كنقطة بداية
 FROM python:3.11-slim
 
-# Set working directory
+# تعيين مجلد العمل داخل الحاوية
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for better caching
+# انسخ ملف المكتبات أولاً للاستفادة من التخزين المؤقت (caching)
 COPY requirements.txt .
 
-# Install Python dependencies
+# تثبيت المكتبات المطلوبة
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY telegram_bot.py .
+# انسخ باقي ملفات المشروع إلى الحاوية
+COPY . .
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash app
-USER app
-
-# Expose port (Cloud Run will set PORT environment variable)
+# اجعل المنفذ 8080 متاحاً للعالم الخارجي
 EXPOSE 8080
 
-# Health check endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8080/health')" || exit 1
-
-# Run the bot
-# Option 1: Using Python directly (current)
-CMD ["python", "telegram_bot.py"]
-
-# Option 2: Using gunicorn for production (uncomment to use)
-# CMD ["gunicorn", "telegram_bot:app", "--bind", "0.0.0.0:${PORT:-8080}", "--workers", "2", "--timeout", "300"]
+# الأمر الذي سيتم تشغيله عند بدء تشغيل الحاوية
+# نستخدم gunicorn لأنه الخيار الأفضل للبيئات الإنتاجية مثل Cloud Run
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "telegram_bot:app"]
