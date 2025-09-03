@@ -61,7 +61,7 @@ python telegram_bot.py
     -   `_SUPABASE_URL`
     -   `_SUPABASE_KEY`
     **ملاحظة هامة جداً:**
-    - **اسم السر (Secret Name)** في Secret Manager يجب أن يكون مطابقاً تماماً للأسماء المستخدمة في ملف `cloudbuild.yaml`.
+    - **اسم السر (Secret Name)** في Secret Manager يجب أن يكون مطابقاً تماماً لهذه القائمة (مثلاً، `_TELEGRAM_TOKEN`).
     - **اسم متغير البيئة (Environment Variable)** الذي يستخدمه الكود هو شيء مختلف (مثلاً، `TELEGRAM_TOKEN`).
 3.  اذهب إلى **IAM & Admin** → **IAM**.
 4.  ابحث عن حساب خدمة **Cloud Build** (عادة `[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`) وامنحه صلاحية `Secret Manager Secret Accessor`.
@@ -123,14 +123,23 @@ CREATE TABLE public.target_users (
 ```sql
 CREATE TABLE public.user_answers_bot (
     id SERIAL PRIMARY KEY,
-    user_id BIGINT REFERENCES target_users(telegram_id),
-    question_id INTEGER REFERENCES questions(id),
+    user_id BIGINT NOT NULL,
+    question_id INTEGER NOT NULL,
     selected_answer CHAR(1) NOT NULL,
     correct_answer CHAR(1) NOT NULL,
     is_correct BOOLEAN NOT NULL,
     answered_at TIMESTAMP DEFAULT NOW(),
     is_reported BOOLEAN DEFAULT FALSE,
-    report_reason TEXT
+    report_reason TEXT,
+
+    CONSTRAINT fk_user
+      FOREIGN KEY(user_id) 
+	  REFERENCES target_users(telegram_id)
+	  ON DELETE CASCADE,
+    CONSTRAINT fk_question
+      FOREIGN KEY(question_id) 
+	  REFERENCES questions(id)
+	  ON DELETE CASCADE
 );
 ```
 

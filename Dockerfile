@@ -1,23 +1,22 @@
-# استخدم نسخة بايثون رسمية كنقطة بداية
+# Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
-# تعيين مجلد العمل داخل الحاوية
+# Set the working directory in the container
 WORKDIR /app
 
-# انسخ ملف المكتبات أولاً للاستفادة من التخزين المؤقت (caching)
+# Copy the requirements file first to leverage Docker cache
 COPY requirements.txt .
 
-# تثبيت المكتبات المطلوبة
+# Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# انسخ باقي ملفات المشروع إلى الحاوية
+# Copy the rest of the application's source code
 COPY . .
 
-# اجعل المنفذ 8080 متاحاً للعالم الخارجي
+# Make port 8080 available to the world outside this container
 EXPOSE 8080
 
-# الأمر الذي سيتم تشغيله عند بدء تشغيل الحاوية
-# نستخدم gunicorn لأنه الخيار الأفضل للبيئات الإنتاجية مثل Cloud Run
+# Run the web server on container startup using Gunicorn for production
 # --workers 1: Cloud Run is single-threaded per instance, so 1 worker is optimal.
 # --threads 8: Use threads within the worker to handle concurrent I/O efficiently.
 # --timeout 120: Increase timeout to 120 seconds to handle potentially slow API responses.
