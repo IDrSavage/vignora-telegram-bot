@@ -49,33 +49,34 @@ python telegram_bot.py
 
 ## النشر على Google Cloud Run
 
-### 1. إعداد Cloud Build Trigger
+يستخدم هذا المشروع نظام نشر تلقائي (CI/CD) باستخدام Google Cloud Build و Secret Manager لضمان الأمان والكفاءة.
 
-في Google Cloud Console → Cloud Build → Triggers:
+### 1. إعداد الأسرار (Secrets) في Secret Manager
 
-- **الاسم**: `vignora-bot-trigger`
-- **Event**: Push to a branch
-- **Source**: GitHub repository + branch (main)
-- **Build configuration**: Cloud Build configuration file (yaml)
-- **File location**: `cloudbuild.yaml`
+قبل إعداد النشر، يجب تخزين المعلومات الحساسة بشكل آمن.
 
-### 2. إعداد المتغيرات (Substitutions)
+1.  اذهب إلى **Secret Manager** في Google Cloud Console.
+2.  أنشئ الأسرار (Secrets) التالية وضع القيم الحقيقية بداخلها:
+    -   `vignora-telegram-token`
+    -   `vignora-supabase-url`
+    -   `vignora-supabase-key`
+3.  تأكد من منح صلاحية **Secret Manager Secret Accessor** لحساب خدمة Cloud Build (عادة يكون `[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`).
 
-في نفس صفحة إنشاء التريجر، تحت Variables:
+### 2. إعداد Cloud Build Trigger
 
-```
-_TELEGRAM_TOKEN = توكن البوت
-_SUPABASE_URL = https://…supabase.co
-_SUPABASE_KEY = مفتاح سوبابيس
-_TELEGRAM_CHANNEL_ID = @Vignora
-_TELEGRAM_CHANNEL_LINK = https://t.me/Vignora
-_CHANNEL_SUBSCRIPTION_REQUIRED = true
-_CLOUD_RUN_HOSTNAME = vignora-bot-826012995194.us-central1.run.app
-```
+1.  اذهب إلى **Cloud Build** → **Triggers** في Google Cloud Console.
+2.  أنشئ Trigger جديد بالإعدادات التالية:
+    -   **Name**: `vignora-bot-deploy-trigger` (أو أي اسم تفضله)
+    -   **Event**: Push to a branch
+    -   **Source Repository**: اختر مستودع GitHub الخاص بك.
+    -   **Branch**: `^master$` (أو `^main$`)
+    -   **Configuration**: Cloud Build configuration file (yaml)
+    -   **Location**: Repository
+    -   **Cloud Build file location**: `cloudbuild.yaml`
 
 ### 3. النشر التلقائي
 
-بعد إعداد التريجر، كل `git push` سيؤدي إلى نشر تلقائي.
+بعد إعداد الـ Trigger، أي `git push` إلى الفرع المحدد سيؤدي إلى بناء ونشر نسخة جديدة من البوت تلقائياً.
 
 ## بنية قاعدة البيانات
 
