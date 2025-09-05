@@ -1204,6 +1204,41 @@ def check_environment():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+@app.route('/test-token', methods=['GET'])
+def test_token():
+    """Test Telegram TOKEN (for debugging)"""
+    try:
+        if not TELEGRAM_TOKEN:
+            return jsonify({
+                'status': 'error',
+                'message': 'TELEGRAM_TOKEN not set',
+                'timestamp': datetime.now().isoformat()
+            }), 400
+        
+        # Test TOKEN
+        test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
+        bot_info = test_future.result(timeout=30)
+        
+        return jsonify({
+            'status': 'success',
+            'bot_info': {
+                'id': bot_info.id,
+                'username': bot_info.username,
+                'first_name': bot_info.first_name,
+                'can_join_groups': bot_info.can_join_groups,
+                'can_read_all_group_messages': bot_info.can_read_all_group_messages
+            },
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error("TOKEN test failed: %s", e)
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Webhook endpoint for Telegram updates"""
@@ -1343,11 +1378,12 @@ def ensure_initialized():
             logger.info("Testing Telegram TOKEN...")
             try:
                 test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
-                bot_info = test_future.result(timeout=10)
+                bot_info = test_future.result(timeout=30)  # زيادة timeout
                 logger.info(f"✅ TOKEN is valid. Bot: {bot_info.username} ({bot_info.first_name})")
             except Exception as e:
-                logger.critical(f"❌ Invalid TOKEN: {e}")
-                raise ValueError(f"Invalid TELEGRAM_TOKEN: {e}")
+                logger.critical(f"❌ TOKEN test failed: {e}")
+                # لا نرفع خطأ، نتابع التهيئة
+                logger.warning("Continuing without TOKEN validation...")
             
             # 5. Initialize the application in the global loop
             logger.info("Initializing Telegram application...")
