@@ -1378,7 +1378,7 @@ def ensure_initialized():
             logger.info("Testing Telegram TOKEN...")
             try:
                 test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
-                bot_info = test_future.result(timeout=30)  # زيادة timeout
+                bot_info = test_future.result(timeout=60)  # زيادة timeout إلى 60 ثانية
                 logger.info(f"✅ TOKEN is valid. Bot: {bot_info.username} ({bot_info.first_name})")
             except Exception as e:
                 logger.critical(f"❌ TOKEN test failed: {e}")
