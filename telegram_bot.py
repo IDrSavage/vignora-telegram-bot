@@ -1102,7 +1102,7 @@ def health_check():
     """Health check endpoint for Cloud Run"""
     try:
         # Check if bot is initialized
-        bot_status = "initialized" if bot_initialized and application is not None else "not_initialized"
+        bot_status = "initialized" if _initialized and application is not None else "not_initialized"
         
         # Check environment variables
         env_status = {
@@ -1121,7 +1121,9 @@ def health_check():
             'bot_status': bot_status,
             'supabase_status': supabase_status,
             'environment_variables': env_status,
-            'version': '2.0'
+            'initialized': _initialized,
+            'ready': app_ready.is_set(),
+            'version': '3.0'
         }), 200
     except Exception as e:
         logger.error("Health check failed: %s", e)
@@ -1148,34 +1150,31 @@ def home():
 def force_initialize():
     """Force initialize the bot (for debugging)"""
     try:
-        import asyncio
-        
-        # Run the async function in a new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            result = loop.run_until_complete(initialize_bot())
-            if result:
-                return jsonify({
-                    'status': 'success',
-                    'message': 'Bot initialized successfully',
-                    'timestamp': datetime.now().isoformat()
-                }), 200
-            else:
-                return jsonify({
-                    'status': 'failed',
-                    'message': 'Failed to initialize bot',
-                    'timestamp': datetime.now().isoformat()
-                }), 500
-        finally:
-            loop.close()
+        result = ensure_initialized()
+        if result:
+            return jsonify({
+                'status': 'success',
+                'message': 'Bot initialized successfully',
+                'initialized': _initialized,
+                'ready': app_ready.is_set(),
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                'status': 'failed',
+                'message': 'Failed to initialize bot',
+                'initialized': _initialized,
+                'ready': app_ready.is_set(),
+                'timestamp': datetime.now().isoformat()
+            }), 500
             
     except Exception as e:
         logger.error("Force initialization failed: %s", e)
         return jsonify({
             'status': 'error',
             'message': str(e),
+            'initialized': _initialized,
+            'ready': app_ready.is_set(),
             'timestamp': datetime.now().isoformat()
         }), 500
 
@@ -1209,140 +1208,145 @@ def check_environment():
 def webhook():
     """Webhook endpoint for Telegram updates"""
     try:
+        # Ensure bot is initialized
+        if not ensure_initialized():
+            logger.error("Bot initialization failed")
+            return jsonify({'error': 'Bot initialization failed'}), 500
+        
+        # Check if app is ready
+        if not app_ready.is_set():
+            logger.warning("Bot not ready yet, returning 503")
+            return jsonify({'error': 'Bot not ready'}), 503
+        
         # Get the update from Telegram
         update_data = request.get_json()
-
-        def run_in_thread(data):
-            """Runs the async task in a new event loop in a new thread."""
-            # This is essential because each thread needs its own event loop
-            # when using asyncio.run()
-            asyncio.run(process_update(data))
-
-        # Run the bot logic in a separate thread to avoid blocking the webhook response.
-        # This immediately returns a 200 OK to Telegram and prevents Gunicorn worker timeouts.
-        thread = Thread(target=run_in_thread, args=(update_data,))
-        thread.start()
-
-        return jsonify({'status': 'ok'}), 200
-    except Exception as e:
-        logger.error("Error in webhook endpoint: %s", e, exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-async def process_update(update_data):
-    """Process Telegram update asynchronously"""
-    try:
-        # Try to initialize bot if not already done
-        if application is None or not bot_initialized:
-            logger.warning("Application object is not initialized. Attempting to initialize...")
-            if not await initialize_bot():
-                logger.error("Failed to initialize bot. Cannot process update.")
-                return
+        if not update_data:
+            return jsonify({'error': 'No update data'}), 400
         
         # Create update object
         update = Update.de_json(update_data, application.bot)
         
-        # Process the update
-        await application.process_update(update)
+        # Process the update in the global event loop
+        future = asyncio.run_coroutine_threadsafe(
+            application.process_update(update),
+            loop
+        )
+        
+        # Wait for completion (with timeout)
+        try:
+            future.result(timeout=10)  # 10 second timeout
+            return jsonify({'status': 'ok'}), 200
+        except asyncio.TimeoutError:
+            logger.warning("Update processing timed out")
+            return jsonify({'error': 'Processing timeout'}), 500
+            
     except Exception as e:
-        logger.error("Error processing update: %s", e, exc_info=True)
+        logger.error("Error in webhook endpoint: %s", e, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+# process_update function removed - now handled directly in webhook endpoint
 
 # --- Bot and Supabase Initialization ---
-# This code runs once when the module is imported by Gunicorn.
+# Global event loop and initialization state
+import threading
 
 logger.info("🚀 Initializing Bot Application...")
 
-# Initialize global variables
+# Global variables
 application = None
 supabase = None
-bot_initialized = False
+_initialized = False
+_init_lock = threading.Lock()
 
-async def initialize_bot():
-    """Initialize the bot application with proper error handling"""
-    global application, supabase, bot_initialized
+# Create global event loop
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# Event to signal when app is ready
+app_ready = asyncio.Event()
+
+def ensure_initialized():
+    """Ensure the bot is initialized (thread-safe)"""
+    global _initialized, application, supabase
     
-    if bot_initialized:
+    if _initialized:
         return True
     
-    try:
-        # 1. Quick environment variables check
-        logger.info("Validating environment variables...")
-        if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
-            missing_vars = []
-            if not TELEGRAM_TOKEN:
-                missing_vars.append("TELEGRAM_TOKEN")
-            if not SUPABASE_URL:
-                missing_vars.append("SUPABASE_URL")
-            if not SUPABASE_KEY:
-                missing_vars.append("SUPABASE_KEY")
-            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
-        
-        logger.info("✅ Environment variables validated successfully.")
-        
-        # 2. Initialize Supabase client (non-blocking)
-        logger.info("Initializing Supabase client...")
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logger.info("✅ Supabase client created successfully.")
-        
-        # 3. Build the Telegram bot application (minimal setup)
-        logger.info("Building Telegram bot application...")
-        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-        
-        # Add essential handlers only (for faster startup)
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-        application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
-        application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
-        application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-        application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
-        application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
-        application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
-        application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
-        application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
-        application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
-        application.add_handler(CallbackQueryHandler(show_about, pattern="^about$"))
-        
-        # Add admin handlers (optional)
+    with _init_lock:
+        if _initialized:  # Double-check after acquiring lock
+            return True
+            
         try:
-            application.add_handler(CommandHandler("test_count", test_count))
-            application.add_handler(CommandHandler("db_info", db_info))
-            application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+            logger.info("Starting bot initialization...")
+            
+            # 1. Validate environment variables
+            logger.info("Validating environment variables...")
+            if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
+                missing_vars = []
+                if not TELEGRAM_TOKEN:
+                    missing_vars.append("TELEGRAM_TOKEN")
+                if not SUPABASE_URL:
+                    missing_vars.append("SUPABASE_URL")
+                if not SUPABASE_KEY:
+                    missing_vars.append("SUPABASE_KEY")
+                raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+            
+            logger.info("✅ Environment variables validated successfully.")
+            
+            # 2. Initialize Supabase client
+            logger.info("Initializing Supabase client...")
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            logger.info("✅ Supabase client created successfully.")
+            
+            # 3. Build the Telegram bot application
+            logger.info("Building Telegram bot application...")
+            application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            
+            # Add all handlers
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+            application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
+            application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
+            application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
+            application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
+            application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
+            application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
+            application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
+            application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
+            application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
+            application.add_handler(CallbackQueryHandler(show_about, pattern="^about$"))
+            
+            # Add admin handlers (optional)
+            try:
+                application.add_handler(CommandHandler("test_count", test_count))
+                application.add_handler(CommandHandler("db_info", db_info))
+                application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+            except Exception as e:
+                logger.warning("Could not add admin handlers: %s", e)
+            
+            # 4. Initialize the application in the global loop
+            logger.info("Initializing Telegram application...")
+            future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
+            future.result(timeout=30)  # Wait up to 30 seconds
+            
+            # Signal that app is ready
+            loop.call_soon_threadsafe(app_ready.set)
+            _initialized = True
+            
+            logger.info("✅ Bot application initialized successfully with all handlers.")
+            return True
+            
         except Exception as e:
-            logger.warning("Could not add admin handlers: %s", e)
-        
-        # 4. Initialize the application
-        logger.info("Initializing Telegram application...")
-        await application.initialize()
-        logger.info("✅ Telegram application initialized successfully.")
-        
-        bot_initialized = True
-        logger.info("✅ Bot application initialized successfully with all handlers.")
-        return True
-        
-    except ValueError as e:
-        logger.critical("❌ Missing required environment variable: %s", e)
-        return False
-    except Exception as e:
-        logger.critical("❌ Failed to initialize bot: %s", e, exc_info=True)
-        return False
-
-# Try to initialize the bot, but don't fail if it doesn't work
-# This allows the Flask app to start even if the bot fails
-async def startup_initialize():
-    try:
-        await initialize_bot()
-    except Exception as e:
-        logger.critical("❌ Critical error during bot initialization: %s", e, exc_info=True)
-        # Don't raise the exception - let Flask app start
-
-# Note: We'll initialize the bot when the first webhook request comes in
+            logger.critical("❌ Failed to initialize bot: %s", e, exc_info=True)
+            return False
 
 
-async def main_polling():
+def main_polling():
     """Main function for local execution (polling mode)."""
     logger.info("No PORT environment variable. Running in polling mode.")
     
     # Ensure bot is initialized
-    if not await initialize_bot():
+    if not ensure_initialized():
         logger.critical("Failed to initialize bot. Cannot start polling mode.")
         return
     
@@ -1352,10 +1356,12 @@ async def main_polling():
         logger.info("Channel subscription check is DISABLED.")
 
     logger.info("Bot is running and ready to receive messages via polling.")
-    await application.run_polling()
+    
+    # Run polling in the global event loop
+    future = asyncio.run_coroutine_threadsafe(application.run_polling(), loop)
+    future.result()  # This will run indefinitely
 
 if __name__ == "__main__":
     # This block is for local development only.
     # Gunicorn does not run this.
-    import asyncio
-    asyncio.run(main_polling())
+    main_polling()
