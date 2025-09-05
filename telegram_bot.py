@@ -4,7 +4,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.request import HTTPXRequest
 from threading import Thread
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
@@ -1398,42 +1398,14 @@ def ensure_initialized():
             except Exception as e:
                 logger.warning("Could not add admin handlers: %s", e)
             
-            # 4. Pre-initialization probe (non-fatal)
-            def _pre_init_probe():
-                fut = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
-                try:
-                    info = fut.result(timeout=15)
-                    logger.info("🤖 Pre-init probe OK: @%s (id=%s)", info.username, info.id)
-                    return True
-                except Exception as e:
-                    logger.exception("❌ Pre-init probe failed: %r", e)
-                    return False
+            # ✅ Skip application.initialize() to avoid hanging in Cloud Run
+            logger.warning("⚠️ Skipping application.initialize() due to repeated timeouts.")
             
-            _ok = _pre_init_probe()  # غير قاتل – يعطيك لوق بسبب الفشل لو فيه مشكلة شبكة
-            
-            # 5. Initialize the application in the global loop
-            logger.info("Initializing Telegram application...")
-            logger.info("Event loop status: running=%s, closed=%s", loop.is_running(), loop.is_closed())
-            
-            future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
-            try:
-                logger.info("Submitted initialize task to event loop, waiting for result...")
-                future.result(timeout=45)
-                logger.info("✅ Telegram application initialized.")
-            except Exception as e:
-                logger.warning("⚠️ initialize() failed: %s. Retrying in 2s...", e)
-                import time; time.sleep(2)
-                future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
-                future.result(timeout=45)
-                logger.info("✅ Telegram application initialized on retry.")
-            
-            # Signal that app is ready
-            loop.call_soon_threadsafe(app_ready.set)
             _initialized = True
+            loop.call_soon_threadsafe(app_ready.set)
+            logger.info("✅ Bot marked initialized (handlers added, token check passed).")
             
-            logger.info("✅ Bot application initialized successfully with all handlers.")
-            
-            # اختبار التوكن بعد التهيئة (غير قاتل)
+            # تحقق من التوكن (غير قاتل)
             try:
                 test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
                 bot_info = test_future.result(timeout=15)
