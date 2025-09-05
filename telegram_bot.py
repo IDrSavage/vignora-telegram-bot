@@ -20,9 +20,9 @@ from flask import Flask, request, jsonify
 # تحميل متغيرات البيئة
 
 # تعيين المتغيرات الثابتة - مطلوبة من ملف .env
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Vignora")
 TELEGRAM_CHANNEL_LINK = os.getenv("TELEGRAM_CHANNEL_LINK", "https://t.me/Vignora")
 CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "true").lower() == "true"
@@ -1331,6 +1331,7 @@ def ensure_initialized():
             
             # 1. Validate environment variables
             logger.info("Validating environment variables...")
+            logger.info("Token prefix: %s... len=%s", TELEGRAM_TOKEN[:8], len(TELEGRAM_TOKEN))
             if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
                 missing_vars = []
                 if not TELEGRAM_TOKEN:
@@ -1374,18 +1375,7 @@ def ensure_initialized():
             except Exception as e:
                 logger.warning("Could not add admin handlers: %s", e)
             
-            # 4. Test TOKEN first
-            logger.info("Testing Telegram TOKEN...")
-            try:
-                test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
-                bot_info = test_future.result(timeout=60)  # زيادة timeout إلى 60 ثانية
-                logger.info(f"✅ TOKEN is valid. Bot: {bot_info.username} ({bot_info.first_name})")
-            except Exception as e:
-                logger.critical(f"❌ TOKEN test failed: {e}")
-                # لا نرفع خطأ، نتابع التهيئة
-                logger.warning("Continuing without TOKEN validation...")
-            
-            # 5. Initialize the application in the global loop
+            # 4. Initialize the application in the global loop
             logger.info("Initializing Telegram application...")
             future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
             future.result(timeout=60)  # ارفعها 60 مبدئياً
@@ -1395,6 +1385,15 @@ def ensure_initialized():
             _initialized = True
             
             logger.info("✅ Bot application initialized successfully with all handlers.")
+            
+            # اختبار التوكن بعد التهيئة (غير قاتل)
+            try:
+                test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
+                bot_info = test_future.result(timeout=15)
+                logger.info("✅ TOKEN valid. Bot: @%s (id=%s)", bot_info.username, bot_info.id)
+            except Exception as e:
+                logger.warning("⚠️ getMe failed post-init (non-fatal): %s", e)
+            
             return True
             
         except Exception as e:
