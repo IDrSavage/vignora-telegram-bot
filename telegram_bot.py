@@ -1363,16 +1363,15 @@ def ensure_initialized():
             # 3. Build the Telegram bot application
             logger.info("Building Telegram bot application...")
             
-            # مهلات واضحة + تعطيل HTTP/2 (بعض البيئات تعلّق مع http2)
+            # مهلات واضحة
             req = HTTPXRequest(
                 connect_timeout=5,
                 read_timeout=20,
                 write_timeout=20,
-                pool_timeout=5,
-                http2=False  # ← مهم
+                pool_timeout=5
             )
             
-            application = ApplicationBuilder() \
+            application = Application.builder() \
                 .token(TELEGRAM_TOKEN) \
                 .request(req) \
                 .build()
