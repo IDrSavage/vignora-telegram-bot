@@ -1377,8 +1377,11 @@ def ensure_initialized():
             
             # 4. Initialize the application in the global loop
             logger.info("Initializing Telegram application...")
+            logger.info("Event loop status: running=%s, closed=%s", loop.is_running(), loop.is_closed())
             future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
-            future.result(timeout=60)  # ارفعها 60 مبدئياً
+            logger.info("Submitted initialize task to event loop, waiting for result...")
+            future.result(timeout=120)  # ارفعها 120 ثانية
+            logger.info("✅ Application.initialize() completed successfully")
             
             # Signal that app is ready
             loop.call_soon_threadsafe(app_ready.set)
