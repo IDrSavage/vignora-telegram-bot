@@ -1100,11 +1100,36 @@ app = Flask(__name__)
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint for Cloud Run"""
-    return jsonify({
-        'status': 'healthy',
-        'bot': 'Vignora Medical Questions Bot',
-        'timestamp': datetime.now().isoformat()
-    }), 200
+    try:
+        # Check if bot is initialized
+        bot_status = "initialized" if bot_initialized and application is not None else "not_initialized"
+        
+        # Check environment variables
+        env_status = {
+            'TELEGRAM_TOKEN': 'set' if TELEGRAM_TOKEN else 'missing',
+            'SUPABASE_URL': 'set' if SUPABASE_URL else 'missing',
+            'SUPABASE_KEY': 'set' if SUPABASE_KEY else 'missing'
+        }
+        
+        # Check Supabase connection
+        supabase_status = "connected" if supabase is not None else "not_connected"
+        
+        return jsonify({
+            'status': 'healthy',
+            'bot': 'Vignora Medical Questions Bot',
+            'timestamp': datetime.now().isoformat(),
+            'bot_status': bot_status,
+            'supabase_status': supabase_status,
+            'environment_variables': env_status,
+            'version': '2.0'
+        }), 200
+    except Exception as e:
+        logger.error("Health check failed: %s", e)
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/', methods=['GET'])
 def home():
@@ -1114,9 +1139,34 @@ def home():
         'status': 'active',
         'endpoints': {
             'health': '/health',
-            'webhook': '/webhook'
+            'webhook': '/webhook',
+            'init': '/init'
         }
     }), 200
+
+@app.route('/init', methods=['POST'])
+def force_initialize():
+    """Force initialize the bot (for debugging)"""
+    try:
+        if initialize_bot():
+            return jsonify({
+                'status': 'success',
+                'message': 'Bot initialized successfully',
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                'status': 'failed',
+                'message': 'Failed to initialize bot',
+                'timestamp': datetime.now().isoformat()
+            }), 500
+    except Exception as e:
+        logger.error("Force initialization failed: %s", e)
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -1144,9 +1194,12 @@ def webhook():
 async def process_update(update_data):
     """Process Telegram update asynchronously"""
     try:
+        # Try to initialize bot if not already done
         if application is None:
-            logger.error("Application object is not initialized. Cannot process update.")
-            return
+            logger.warning("Application object is not initialized. Attempting to initialize...")
+            if not initialize_bot():
+                logger.error("Failed to initialize bot. Cannot process update.")
+                return
         
         # Create update object
         update = Update.de_json(update_data, application.bot)
@@ -1161,48 +1214,79 @@ async def process_update(update_data):
 
 logger.info("🚀 Initializing Bot Application...")
 
-# 1. Validate environment variables
-try:
-    validate_environment()
-    logger.info("Environment variables validated successfully.")
-    logger.info("Supabase URL is set.") # Changed for security/clarity
-except ValueError as e:
-    logger.critical("Missing required environment variable: %s. Bot cannot start.", e)
-    raise e  # Stop the application from starting
+# Initialize global variables
+application = None
+supabase = None
+bot_initialized = False
 
-# 2. Initialize Supabase client
+def initialize_bot():
+    """Initialize the bot application with proper error handling"""
+    global application, supabase, bot_initialized
+    
+    if bot_initialized:
+        return True
+    
+    try:
+        # 1. Validate environment variables
+        logger.info("Validating environment variables...")
+        validate_environment()
+        logger.info("✅ Environment variables validated successfully.")
+        
+        # 2. Initialize Supabase client
+        logger.info("Initializing Supabase client...")
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("✅ Supabase client created successfully.")
+        
+        # 3. Build the Telegram bot application and add handlers
+        logger.info("Building Telegram bot application...")
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        
+        # Add all handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+        application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
+        application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
+        application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
+        application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
+        application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
+        application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
+        application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
+        application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
+        application.add_handler(CommandHandler("test_count", test_count))
+        application.add_handler(CommandHandler("db_info", db_info))
+        application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+        application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
+        application.add_handler(CallbackQueryHandler(show_about, pattern="^about$"))
+        
+        bot_initialized = True
+        logger.info("✅ Bot application initialized successfully with all handlers.")
+        return True
+        
+    except ValueError as e:
+        logger.critical("❌ Missing required environment variable: %s", e)
+        return False
+    except Exception as e:
+        logger.critical("❌ Failed to initialize bot: %s", e, exc_info=True)
+        return False
+
+# Try to initialize the bot, but don't fail if it doesn't work
+# This allows the Flask app to start even if the bot fails
 try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    logger.info("Supabase client created successfully.")
+    initialize_bot()
 except Exception as e:
-    logger.critical("Could not create Supabase client: %s. Bot cannot start.", e)
-    raise e  # Stop the application from starting
-
-# 3. Build the Telegram bot application and add handlers
-application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
-application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_"))
-application.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-application.add_handler(CallbackQueryHandler(show_quiz_menu, pattern="^menu$"))
-application.add_handler(CallbackQueryHandler(end_session, pattern="^end_session$"))
-application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
-application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
-application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
-application.add_handler(CommandHandler("test_count", test_count))
-application.add_handler(CommandHandler("db_info", db_info))
-application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
-application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
-application.add_handler(CallbackQueryHandler(show_about, pattern="^about$"))
-
-logger.info("✅ Bot application initialized successfully with all handlers.")
+    logger.critical("❌ Critical error during bot initialization: %s", e, exc_info=True)
+    # Don't raise the exception - let Flask app start
 
 
 def main_polling():
     """Main function for local execution (polling mode)."""
     logger.info("No PORT environment variable. Running in polling mode.")
+    
+    # Ensure bot is initialized
+    if not initialize_bot():
+        logger.critical("Failed to initialize bot. Cannot start polling mode.")
+        return
+    
     if CHANNEL_SUBSCRIPTION_REQUIRED:
         logger.info("Channel subscription check is ENABLED.")
     else:
