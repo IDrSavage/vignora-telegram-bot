@@ -1265,6 +1265,7 @@ asyncio.set_event_loop(loop)
 # ✅ شغّل اللوب في ثريد بالخلفية
 _loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
 _loop_thread.start()
+logger.info("✅ Event loop started in background thread")
 
 # Event to signal when app is ready
 app_ready = asyncio.Event()
@@ -1328,7 +1329,17 @@ def ensure_initialized():
             except Exception as e:
                 logger.warning("Could not add admin handlers: %s", e)
             
-            # 4. Initialize the application in the global loop
+            # 4. Test TOKEN first
+            logger.info("Testing Telegram TOKEN...")
+            try:
+                test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
+                bot_info = test_future.result(timeout=10)
+                logger.info(f"✅ TOKEN is valid. Bot: {bot_info.username} ({bot_info.first_name})")
+            except Exception as e:
+                logger.critical(f"❌ Invalid TOKEN: {e}")
+                raise ValueError(f"Invalid TELEGRAM_TOKEN: {e}")
+            
+            # 5. Initialize the application in the global loop
             logger.info("Initializing Telegram application...")
             future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
             future.result(timeout=30)  # Wait up to 30 seconds
