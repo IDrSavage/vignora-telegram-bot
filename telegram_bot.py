@@ -1262,6 +1262,10 @@ _init_lock = threading.Lock()
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
+# ✅ شغّل اللوب في ثريد بالخلفية
+_loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+_loop_thread.start()
+
 # Event to signal when app is ready
 app_ready = asyncio.Event()
 
