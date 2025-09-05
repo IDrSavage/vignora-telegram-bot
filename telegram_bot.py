@@ -1148,18 +1148,29 @@ def home():
 def force_initialize():
     """Force initialize the bot (for debugging)"""
     try:
-        if initialize_bot():
-            return jsonify({
-                'status': 'success',
-                'message': 'Bot initialized successfully',
-                'timestamp': datetime.now().isoformat()
-            }), 200
-        else:
-            return jsonify({
-                'status': 'failed',
-                'message': 'Failed to initialize bot',
-                'timestamp': datetime.now().isoformat()
-            }), 500
+        import asyncio
+        
+        # Run the async function in a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            result = loop.run_until_complete(initialize_bot())
+            if result:
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Bot initialized successfully',
+                    'timestamp': datetime.now().isoformat()
+                }), 200
+            else:
+                return jsonify({
+                    'status': 'failed',
+                    'message': 'Failed to initialize bot',
+                    'timestamp': datetime.now().isoformat()
+                }), 500
+        finally:
+            loop.close()
+            
     except Exception as e:
         logger.error("Force initialization failed: %s", e)
         return jsonify({
@@ -1221,9 +1232,9 @@ async def process_update(update_data):
     """Process Telegram update asynchronously"""
     try:
         # Try to initialize bot if not already done
-        if application is None:
+        if application is None or not bot_initialized:
             logger.warning("Application object is not initialized. Attempting to initialize...")
-            if not initialize_bot():
+            if not await initialize_bot():
                 logger.error("Failed to initialize bot. Cannot process update.")
                 return
         
@@ -1245,7 +1256,7 @@ application = None
 supabase = None
 bot_initialized = False
 
-def initialize_bot():
+async def initialize_bot():
     """Initialize the bot application with proper error handling"""
     global application, supabase, bot_initialized
     
@@ -1298,6 +1309,11 @@ def initialize_bot():
         except Exception as e:
             logger.warning("Could not add admin handlers: %s", e)
         
+        # 4. Initialize the application
+        logger.info("Initializing Telegram application...")
+        await application.initialize()
+        logger.info("✅ Telegram application initialized successfully.")
+        
         bot_initialized = True
         logger.info("✅ Bot application initialized successfully with all handlers.")
         return True
@@ -1311,19 +1327,22 @@ def initialize_bot():
 
 # Try to initialize the bot, but don't fail if it doesn't work
 # This allows the Flask app to start even if the bot fails
-try:
-    initialize_bot()
-except Exception as e:
-    logger.critical("❌ Critical error during bot initialization: %s", e, exc_info=True)
-    # Don't raise the exception - let Flask app start
+async def startup_initialize():
+    try:
+        await initialize_bot()
+    except Exception as e:
+        logger.critical("❌ Critical error during bot initialization: %s", e, exc_info=True)
+        # Don't raise the exception - let Flask app start
+
+# Note: We'll initialize the bot when the first webhook request comes in
 
 
-def main_polling():
+async def main_polling():
     """Main function for local execution (polling mode)."""
     logger.info("No PORT environment variable. Running in polling mode.")
     
     # Ensure bot is initialized
-    if not initialize_bot():
+    if not await initialize_bot():
         logger.critical("Failed to initialize bot. Cannot start polling mode.")
         return
     
@@ -1333,9 +1352,10 @@ def main_polling():
         logger.info("Channel subscription check is DISABLED.")
 
     logger.info("Bot is running and ready to receive messages via polling.")
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == "__main__":
     # This block is for local development only.
     # Gunicorn does not run this.
-    main_polling()
+    import asyncio
+    asyncio.run(main_polling())
