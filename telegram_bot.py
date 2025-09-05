@@ -1234,7 +1234,7 @@ def webhook():
         
         # Wait for completion (with timeout)
         try:
-            future.result(timeout=10)  # 10 second timeout
+            future.result(timeout=20)  # 20 second timeout
             return jsonify({'status': 'ok'}), 200
         except asyncio.TimeoutError:
             logger.warning("Update processing timed out")
@@ -1247,8 +1247,7 @@ def webhook():
 # process_update function removed - now handled directly in webhook endpoint
 
 # --- Bot and Supabase Initialization ---
-# Global event loop and initialization state
-import threading
+import threading, asyncio
 
 logger.info("🚀 Initializing Bot Application...")
 
@@ -1258,14 +1257,25 @@ supabase = None
 _initialized = False
 _init_lock = threading.Lock()
 
-# Create global event loop
+# أنشئ لوب جديد
 loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
 
-# ✅ شغّل اللوب في ثريد بالخلفية
-_loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+# شغّل اللوب في ثريد خلفي، وداخل الثريد عيّن اللوب الحالي ثم run_forever
+def _loop_runner():
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+_loop_thread = threading.Thread(target=_loop_runner, daemon=True)
 _loop_thread.start()
-logger.info("✅ Event loop started in background thread")
+
+# (اختياري) تحقّق أنه شغّال
+def _log_loop_running():
+    try:
+        print(f"[DBG] loop.is_running={loop.is_running()}")
+    except Exception as e:
+        print(f"[DBG] loop check failed: {e}")
+
+loop.call_soon_threadsafe(_log_loop_running)
 
 # Event to signal when app is ready
 app_ready = asyncio.Event()
@@ -1342,7 +1352,7 @@ def ensure_initialized():
             # 5. Initialize the application in the global loop
             logger.info("Initializing Telegram application...")
             future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
-            future.result(timeout=30)  # Wait up to 30 seconds
+            future.result(timeout=60)  # ارفعها 60 مبدئياً
             
             # Signal that app is ready
             loop.call_soon_threadsafe(app_ready.set)
