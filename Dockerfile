@@ -19,5 +19,6 @@ EXPOSE 8080
 # Run the web server on container startup using Gunicorn for production
 # --workers 1: Cloud Run is single-threaded per instance, so 1 worker is optimal.
 # --threads 8: Use threads within the worker to handle concurrent I/O efficiently.
-# --timeout 120: Increase timeout to 120 seconds to handle potentially slow API responses.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "120", "telegram_bot:app"]
+# --timeout 300: Increase timeout to 300 seconds to handle bot initialization.
+# --preload: Preload the application for faster startup.
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "300", "--preload", "telegram_bot:app"]

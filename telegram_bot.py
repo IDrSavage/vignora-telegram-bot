@@ -1168,6 +1168,32 @@ def force_initialize():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+@app.route('/env', methods=['GET'])
+def check_environment():
+    """Check environment variables (for debugging)"""
+    try:
+        env_status = {
+            'TELEGRAM_TOKEN': 'set' if TELEGRAM_TOKEN else 'missing',
+            'SUPABASE_URL': 'set' if SUPABASE_URL else 'missing',
+            'SUPABASE_KEY': 'set' if SUPABASE_KEY else 'missing',
+            'TELEGRAM_CHANNEL_ID': TELEGRAM_CHANNEL_ID,
+            'TELEGRAM_CHANNEL_LINK': TELEGRAM_CHANNEL_LINK,
+            'CHANNEL_SUBSCRIPTION_REQUIRED': CHANNEL_SUBSCRIPTION_REQUIRED
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'environment_variables': env_status,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        logger.error("Environment check failed: %s", e)
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Webhook endpoint for Telegram updates"""
@@ -1227,21 +1253,30 @@ def initialize_bot():
         return True
     
     try:
-        # 1. Validate environment variables
+        # 1. Quick environment variables check
         logger.info("Validating environment variables...")
-        validate_environment()
+        if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
+            missing_vars = []
+            if not TELEGRAM_TOKEN:
+                missing_vars.append("TELEGRAM_TOKEN")
+            if not SUPABASE_URL:
+                missing_vars.append("SUPABASE_URL")
+            if not SUPABASE_KEY:
+                missing_vars.append("SUPABASE_KEY")
+            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        
         logger.info("✅ Environment variables validated successfully.")
         
-        # 2. Initialize Supabase client
+        # 2. Initialize Supabase client (non-blocking)
         logger.info("Initializing Supabase client...")
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         logger.info("✅ Supabase client created successfully.")
         
-        # 3. Build the Telegram bot application and add handlers
+        # 3. Build the Telegram bot application (minimal setup)
         logger.info("Building Telegram bot application...")
         application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
         
-        # Add all handlers
+        # Add essential handlers only (for faster startup)
         application.add_handler(CommandHandler("start", start))
         application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
         application.add_handler(CallbackQueryHandler(send_question, pattern="^quiz$"))
@@ -1252,11 +1287,16 @@ def initialize_bot():
         application.add_handler(CallbackQueryHandler(handle_report, pattern="^report$"))
         application.add_handler(CallbackQueryHandler(handle_report_reason, pattern="^report_incorrect_|^report_typo_|^report_unclear_|^report_topic_"))
         application.add_handler(CallbackQueryHandler(back_to_answer, pattern="^back_to_answer$"))
-        application.add_handler(CommandHandler("test_count", test_count))
-        application.add_handler(CommandHandler("db_info", db_info))
-        application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
         application.add_handler(CallbackQueryHandler(check_subscription, pattern="^check_subscription$"))
         application.add_handler(CallbackQueryHandler(show_about, pattern="^about$"))
+        
+        # Add admin handlers (optional)
+        try:
+            application.add_handler(CommandHandler("test_count", test_count))
+            application.add_handler(CommandHandler("db_info", db_info))
+            application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
+        except Exception as e:
+            logger.warning("Could not add admin handlers: %s", e)
         
         bot_initialized = True
         logger.info("✅ Bot application initialized successfully with all handlers.")
