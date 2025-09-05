@@ -8,6 +8,7 @@ from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, 
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
+import httpx
 
 # Configure logging to integrate with Cloud Run's logging
 logging.basicConfig(
@@ -1242,13 +1243,12 @@ def test_token():
 
 @app.route('/ping-telegram', methods=['GET'])
 def ping_telegram():
-    """تشخيص سريع عبر HTTP من خارج تيليجرام"""
+    """فحص خارجي للاتصال بـ Telegram API"""
     try:
-        fut = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
-        info = fut.result(timeout=10)
-        return jsonify({"ok": True, "username": info.username, "id": info.id})
+        r = httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=10.0)
+        return {"ok": True, "status": r.status_code, "body": r.text}
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        return {"ok": False, "error": str(e)}
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -1405,13 +1405,8 @@ def ensure_initialized():
             loop.call_soon_threadsafe(app_ready.set)
             logger.info("✅ Bot marked initialized (handlers added, token check passed).")
             
-            # تحقق من التوكن (غير قاتل)
-            try:
-                test_future = asyncio.run_coroutine_threadsafe(application.bot.get_me(), loop)
-                bot_info = test_future.result(timeout=15)
-                logger.info("✅ TOKEN valid. Bot: @%s (id=%s)", bot_info.username, bot_info.id)
-            except Exception as e:
-                logger.warning("⚠️ getMe failed post-init (non-fatal): %s", e)
+            # تحقق من التوكن (غير قاتل) - سيتم فحصه عبر /ping-telegram
+            logger.info("✅ Bot ready. Use /ping-telegram endpoint to test Telegram connectivity.")
             
             return True
             
