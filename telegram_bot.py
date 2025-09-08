@@ -1254,16 +1254,11 @@ def ping_telegram():
 def webhook():
     """Webhook endpoint for Telegram updates"""
     try:
-        # Ensure bot is initialized
-        if not ensure_initialized():
-            logger.error("Bot initialization failed")
-            return jsonify({'error': 'Bot initialization failed'}), 500
-        
         # Check if app is ready
         if not app_ready.is_set():
-            logger.warning("Bot not ready yet, returning 503")
+            # This can happen if a request comes in during a cold start before initialization is complete.
+            logger.warning("Bot not ready yet, returning 503.")
             return jsonify({'error': 'Bot not ready'}), 503
-        
         # Get the update from Telegram
         update_data = request.get_json()
         if not update_data:
@@ -1324,7 +1319,7 @@ def _log_loop_running():
 loop.call_soon_threadsafe(_log_loop_running)
 
 # Event to signal when app is ready
-app_ready = asyncio.Event()
+app_ready = threading.Event()
 
 def ensure_initialized():
     """Ensure the bot is initialized (thread-safe)"""
@@ -1402,7 +1397,7 @@ def ensure_initialized():
             logger.warning("⚠️ Skipping application.initialize() due to repeated timeouts.")
             
             _initialized = True
-            loop.call_soon_threadsafe(app_ready.set)
+            app_ready.set()
             logger.info("✅ Bot marked initialized (handlers added, token check passed).")
             
             # تحقق من التوكن (غير قاتل) - سيتم فحصه عبر /ping-telegram
@@ -1414,6 +1409,12 @@ def ensure_initialized():
             logger.critical("❌ Failed to initialize bot: %s", e, exc_info=True)
             return False
 
+# Eagerly initialize the bot when the module is loaded by Gunicorn.
+# This is the recommended pattern for Cloud Run with --preload.
+if not ensure_initialized():
+    # If initialization fails, the application will not be ready.
+    # Gunicorn will still start, but webhook calls will fail.
+    logger.critical("🚨 BOT FAILED TO INITIALIZE ON STARTUP! 🚨")
 
 def main_polling():
     """Main function for local execution (polling mode)."""
