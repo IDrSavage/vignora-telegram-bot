@@ -181,23 +181,24 @@ def get_user_answered_questions(telegram_id: int):
 
 @time_it_sync
 def get_total_questions_count():
-    """جلب عدد الأسئلة الكلي في قاعدة البيانات"""
+    """جلب عدد الأسئلة الكلي في قاعدة البيانات (بطريقة محسنة)"""
     try:
-        # محاولة استخدام count
+        # The most reliable method is using an RPC function.
+        response = supabase.rpc('get_table_count', {'p_table_name': 'questions'}).execute()
+        if response.data:
+            count = response.data
+            logger.info("Got exact question count via RPC: %s", count)
+            return count
+        
+        # Fallback to the previous method if RPC fails
+        logger.warning("RPC count failed, falling back to select with count.")
         response = supabase.table('questions').select('*', count='exact').execute()
         if hasattr(response, 'count') and response.count is not None:
-            logger.info("Got exact question count from Supabase: %s", response.count)
             return response.count
         
-        # إذا فشل count، نجرب طريقة أخرى
-        logger.warning("Supabase count method failed, trying alternative length-based count.")
-        response = supabase.table('questions').select('id').execute()
-        count = len(response.data)
-        logger.info("Got question count from data length: %s", count)
-        return count
-        
+        return 0
     except Exception as e:
-        logger.warning("Could not get total questions count: %s", e)
+        logger.error("Could not get total questions count: %s", e)
         return 0
 
 @time_it_sync
