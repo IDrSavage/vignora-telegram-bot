@@ -8,6 +8,7 @@ from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, 
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
+import time
 import httpx
 
 # Configure logging to integrate with Cloud Run's logging
@@ -65,6 +66,17 @@ def format_timestamp(timestamp):
     except (ValueError, TypeError):
         return "Unknown"
 
+def time_it_sync(func):
+    """A decorator to time synchronous functions and log their execution time."""
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        logger.info(f"SYNC function '{func.__name__}' took {end_time - start_time:.4f} seconds")
+        return result
+    return wrapper
+
+@time_it_sync
 def check_user_exists(telegram_id: int):
     """التحقق من وجود المستخدم في قاعدة البيانات"""
     try:
@@ -75,6 +87,7 @@ def check_user_exists(telegram_id: int):
         # في حالة فشل الاتصال، نفترض أن المستخدم جديد
         return False
 
+@time_it_sync
 def save_user_data(telegram_id: int, username: str, first_name: str, last_name: str, phone_number: str, language_code: str):
     """حفظ بيانات المستخدم في قاعدة البيانات"""
     try:
@@ -97,6 +110,7 @@ def save_user_data(telegram_id: int, username: str, first_name: str, last_name: 
         # في حالة فشل الحفظ، نسمح للمستخدم بالمتابعة
         return True
 
+@time_it_sync
 def update_last_interaction(telegram_id: int):
     """تحديث آخر تفاعل للمستخدم"""
     if not supabase:
@@ -108,6 +122,7 @@ def update_last_interaction(telegram_id: int):
         logger.warning("Could not update last interaction for telegram_id %s: %s", telegram_id, e)
         # لا نوقف البوت بسبب فشل تحديث آخر تفاعل
 
+@time_it_sync
 def save_user_answer(telegram_id: int, question_id: int, selected_answer: str, correct_answer: str, is_correct: bool):
     """حفظ إجابة المستخدم في قاعدة البيانات"""
     try:
@@ -127,6 +142,7 @@ def save_user_answer(telegram_id: int, question_id: int, selected_answer: str, c
         logger.warning("Could not save user answer for telegram_id %s: %s", telegram_id, e)
         return False
 
+@time_it_sync
 def get_user_stats(telegram_id: int):
     """جلب إحصائيات المستخدم"""
     try:
@@ -147,6 +163,7 @@ def get_user_stats(telegram_id: int):
         logger.warning("Could not fetch user stats for telegram_id %s: %s", telegram_id, e)
         return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
 
+@time_it_sync
 def get_user_answered_questions(telegram_id: int):
     """جلب الأسئلة التي أجاب عليها المستخدم"""
     try:
@@ -162,6 +179,7 @@ def get_user_answered_questions(telegram_id: int):
         logger.warning("Could not fetch user answers for telegram_id %s: %s", telegram_id, e)
         return []
 
+@time_it_sync
 def get_total_questions_count():
     """جلب عدد الأسئلة الكلي في قاعدة البيانات"""
     try:
@@ -182,6 +200,7 @@ def get_total_questions_count():
         logger.warning("Could not get total questions count: %s", e)
         return 0
 
+@time_it_sync
 def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
     """جلب أحدث سؤال من قاعدة البيانات (غير مجاب عليه من قبل المستخدم)"""
     try:
@@ -213,6 +232,7 @@ def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
         logger.warning("Could not fetch question: %s", e)
         return None
 
+@time_it_sync
 def get_latest_questions(limit: int = 10):
     """جلب أحدث الأسئلة من قاعدة البيانات"""
     try:
@@ -979,6 +999,7 @@ async def test_bot_permissions(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         await update.message.reply_text(error_message, parse_mode='Markdown')
 
+@time_it_sync
 def report_question(user_id: int, question_id: int, report_reason: str):
     """الإبلاغ عن سؤال"""
     try:
@@ -1337,17 +1358,7 @@ def ensure_initialized():
             
             # 1. Validate environment variables
             logger.info("Validating environment variables...")
-            logger.info("Token prefix: %s... len=%s", TELEGRAM_TOKEN[:8], len(TELEGRAM_TOKEN))
-            if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
-                missing_vars = []
-                if not TELEGRAM_TOKEN:
-                    missing_vars.append("TELEGRAM_TOKEN")
-                if not SUPABASE_URL:
-                    missing_vars.append("SUPABASE_URL")
-                if not SUPABASE_KEY:
-                    missing_vars.append("SUPABASE_KEY")
-                raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
-            
+            validate_environment()
             logger.info("✅ Environment variables validated successfully.")
             
             # 2. Initialize Supabase client
