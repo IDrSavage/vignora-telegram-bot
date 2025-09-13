@@ -598,14 +598,23 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_subscribed:
             await show_subscription_required(update, context, is_new_user=False)
             return
-    
-    def get_question_prerequisites():
-        """Wrapper to run sync DB calls in one thread."""
-        total = get_total_questions_count()
-        answered = get_user_answered_questions(user.id)
-        return total, answered
 
-    total_questions, answered_questions = await asyncio.to_thread(get_question_prerequisites)
+    def get_question_prerequisites_optimized():
+        """Optimized wrapper to get total questions and answered IDs in one thread."""
+        answered_ids = []
+        try:
+            # Use the existing RPC to efficiently get answered question IDs
+            response = supabase.rpc('get_user_stats_and_answered_ids', {'p_user_id': user.id}).execute()
+            if response.data and response.data[0].get('answered_ids'):
+                answered_ids = response.data[0]['answered_ids']
+        except Exception as e:
+            logger.error("Could not fetch answered IDs via RPC for user %s: %s. Falling back.", user.id, e)
+            # Fallback to the old method in case of RPC failure
+            answered_ids = get_user_answered_questions(user.id)
+        total_questions = get_total_questions_count()
+        return total_questions, answered_ids
+
+    total_questions, answered_questions = await asyncio.to_thread(get_question_prerequisites_optimized)
     remaining_questions = total_questions - len(answered_questions)
     
     # التحقق من حد 10 أسئلة للمستخدمين الجدد
