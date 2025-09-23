@@ -255,6 +255,12 @@ def get_latest_questions(limit: int = 10):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بداية التفاعل مع البوت"""
     logger.info("START HANDLER fired for user_id=%s", update.effective_user.id if update.effective_user else None)
+    try:
+        # ردّ فوري وبسيط بلا Markdown
+        await update.effective_chat.send_message("👋 تم التقاط /start — نكمل الإعداد…")
+    except Exception as e:
+        logger.error("START immediate reply failed: %s", e, exc_info=True)
+
     user = update.effective_user
     telegram_id = user.id
     
@@ -1421,7 +1427,7 @@ def ensure_initialized():
                 except Exception as e:
                     logger.warning("PROBE reply failed: %s", e)
             
-            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=-100)
+            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=0)
             
             # Add error handler for logging
             async def _log_ptb_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
