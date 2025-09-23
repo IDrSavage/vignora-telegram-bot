@@ -18,6 +18,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Increase verbosity for PTB internals when debugging Cloud Run behavior
+logging.getLogger("telegram").setLevel(logging.DEBUG)
+logging.getLogger("telegram.ext").setLevel(logging.DEBUG)
+logging.getLogger("httpx").setLevel(logging.INFO)
+
 from flask import Flask, request, jsonify
 
 # تحميل متغيرات البيئة
@@ -1311,6 +1316,14 @@ def webhook():
         except Exception as e:
             logger.error("Failed to enqueue update to PTB queue: %s", e, exc_info=True)
 
+        # Log queue size for visibility (best-effort)
+        def _log_qsize():
+            try:
+                logger.info("UPDATE_QUEUE qsize=%s", application.update_queue.qsize())
+            except Exception:
+                pass
+        loop.call_soon_threadsafe(_log_qsize)
+
         # رجّع 200 فورًا عشان تيليجرام ما يعيد الإرسال
         return jsonify({'status': 'ok'}), 200
 
@@ -1424,7 +1437,7 @@ def ensure_initialized():
                 except Exception as e:
                     logger.warning("PROBE reply failed: %s", e)
             
-            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=0)
+            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=99)
             
             # Add error handler for logging
             async def _log_ptb_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
