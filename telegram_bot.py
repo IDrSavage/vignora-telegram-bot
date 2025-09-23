@@ -460,7 +460,23 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_questions = get_total_questions_count()
         return stats, answered_questions, total_questions
 
-    stats, answered_questions, total_questions = await asyncio.to_thread(get_stats_and_questions)
+    # اجلب إجابات المستخدم مرة واحدة ثم احسب كل شيء محليًا لتقليل عدد الطلبات
+    def _fetch_answers_and_compute():
+        rows = []
+        try:
+            resp = supabase.table('user_answers_bot').select('question_id,is_correct').eq('user_id', user.id).execute()
+            rows = resp.data or []
+        except Exception as e:
+            logger.warning("Stats fetch failed; proceeding with empty rows: %s", e)
+        total = len(rows)
+        correct = sum(1 for r in rows if r.get('is_correct'))
+        accuracy = round(((correct / total) * 100) if total > 0 else 0, 1)
+        stats_loc = {'total_answers': total, 'correct_answers': correct, 'accuracy': accuracy}
+        answered_ids_loc = [r['question_id'] for r in rows if 'question_id' in r]
+        total_questions_loc = get_total_questions_count()
+        return stats_loc, answered_ids_loc, total_questions_loc
+
+    stats, answered_questions, total_questions = await asyncio.to_thread(_fetch_answers_and_compute)
 
     # جلب عدد الأسئلة الكلي والمتبقية
     remaining_questions = total_questions - len(answered_questions)
@@ -600,7 +616,12 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_questions = get_total_questions_count()
         return total_questions, answered_ids
 
-    total_questions, answered_questions = await asyncio.to_thread(get_question_prerequisites_optimized)
+    # نفّذ الحسابين بالتوازي لتقليل الزمن الإجمالي
+    loop_local = asyncio.get_running_loop()
+    total_future = loop_local.run_in_executor(None, get_total_questions_count)
+    answered_future = loop_local.run_in_executor(None, get_user_answered_questions, user.id)
+    total_questions = await total_future
+    answered_questions = await answered_future
     remaining_questions = total_questions - len(answered_questions)
     
     # التحقق من حد 10 أسئلة للمستخدمين الجدد
@@ -695,8 +716,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تحديد ما إذا كانت الإجابة صحيحة
     is_correct = selected_answer == correct_answer
     
-    # حفظ إجابة المستخدم
-    await asyncio.to_thread(save_user_answer, user.id, question_id, selected_answer, correct_answer, is_correct)
+    # حفظ إجابة المستخدم (Fire-and-forget لتقليل زمن الاستجابة)
+    asyncio.create_task(asyncio.to_thread(save_user_answer, user.id, question_id, selected_answer, correct_answer, is_correct))
     
     # إنشاء رسالة النتيجة والأزرار باستخدام الدالة المساعدة
     result_message, reply_markup = await _create_result_message_and_keyboard(context)
