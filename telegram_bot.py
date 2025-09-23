@@ -89,13 +89,11 @@ def time_it_sync(func):
 def check_user_exists(telegram_id: int):
     """التحقق من وجود المستخدم في قاعدة البيانات (بدون تنزيل صفوف)."""
     try:
-        response = supabase.table('target_users').select('telegram_id', count='exact', head=True).eq('telegram_id', telegram_id).execute()
+        response = supabase.table('target_users').select('telegram_id', count='exact').eq('telegram_id', telegram_id).limit(1).execute()
         count_val = getattr(response, 'count', None)
         if count_val is not None:
             return count_val > 0
-        # Fallback: minimal fetch
-        response2 = supabase.table('target_users').select('telegram_id').eq('telegram_id', telegram_id).limit(1).execute()
-        return bool(response2.data)
+        return bool(response.data)
     except Exception as e:
         logger.warning("Could not check user existence for telegram_id %s: %s", telegram_id, e)
         # في حالة فشل الاتصال، نفترض أن المستخدم جديد
@@ -260,11 +258,6 @@ def get_latest_questions(limit: int = 10):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بداية التفاعل مع البوت"""
     logger.info("START HANDLER fired for user_id=%s", update.effective_user.id if update.effective_user else None)
-    try:
-        # ردّ فوري وبسيط بلا Markdown
-        await update.effective_chat.send_message("👋 تم التقاط /start — نكمل الإعداد…")
-    except Exception as e:
-        logger.error("START immediate reply failed: %s", e, exc_info=True)
 
     user = update.effective_user
     telegram_id = user.id
@@ -1424,23 +1417,7 @@ def ensure_initialized():
             except Exception as e:
                 logger.warning("Could not add admin handlers: %s", e)
             
-            # Add probe handler for debugging (temporary)
-            async def _echo_probe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                logger.info("PROBE UPDATE: %s", update.to_dict())
-                try:
-                    await update.effective_chat.send_message("✅ وصلني التحديث")
-                except Exception as e:
-                    logger.warning("PROBE reply failed: %s", e)
-            
-            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=99)
-
-            # Low-priority tap to confirm dispatcher pipeline
-            async def _tap(update: object, context: ContextTypes.DEFAULT_TYPE):
-                try:
-                    logger.info("DISPATCH ENTER: type=%s", type(update))
-                except Exception:
-                    logger.info("DISPATCH ENTER: (type unknown)")
-            application.add_handler(TypeHandler(object, _tap), group=-1000)
+            # (diagnostic handlers removed)
             
             # Add error handler for logging
             async def _log_ptb_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
