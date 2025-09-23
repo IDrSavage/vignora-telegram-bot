@@ -1375,7 +1375,7 @@ def ensure_initialized():
                 read_timeout=20,
                 write_timeout=20,
                 pool_timeout=10,
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
+                connection_pool_size=50
             )
             
             application = Application.builder() \
