@@ -1285,26 +1285,24 @@ def ping_telegram():
 def webhook():
     """Webhook endpoint for Telegram updates"""
     try:
-        # لو البوت مو جاهز، رجّع 503 عشان تيليجرام يعيد الإرسال
         if not app_ready.is_set():
-            logger.warning("Bot not ready yet, returning 503.")
+            logger.warning("Webhook hit but app not ready.")
             return jsonify({'error': 'Bot not ready'}), 503
 
         data = request.get_json()
         if not data:
+            logger.warning("Webhook hit with empty body.")
             return jsonify({'error': 'No update data'}), 400
 
+        logger.info("WEBHOOK RECEIVED: %s", str(data)[:1000])  # قصّ للطول
         update = Update.de_json(data, application.bot)
 
-        # أرمي التحديث في طابور PTB (Non-blocking)
         loop.call_soon_threadsafe(application.update_queue.put_nowait, update)
-
-        # جاهزين → 200
+        logger.info("WEBHOOK ENQUEUED update_id=%s", data.get("update_id"))
         return jsonify({'status': 'ok'}), 200
 
     except Exception as e:
-        logger.error("Error in webhook endpoint: %s", e, exc_info=True)
-        # فشل حقيقي → 500 عشان تيليجرام يعيد المحاولة
+        logger.error("Error in webhook: %s", e, exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 # process_update function removed - now handled directly in webhook endpoint
@@ -1404,6 +1402,16 @@ def ensure_initialized():
                 application.add_handler(CommandHandler("test_bot_permissions", test_bot_permissions))
             except Exception as e:
                 logger.warning("Could not add admin handlers: %s", e)
+            
+            # Add probe handler for debugging (temporary)
+            async def _echo_probe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                logger.info("PROBE UPDATE: %s", update.to_dict())
+                try:
+                    await update.effective_chat.send_message("✅ وصلني التحديث")
+                except Exception as e:
+                    logger.warning("PROBE reply failed: %s", e)
+            
+            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=99)
             
             # ✅ Initialize and start the application properly
             logger.info("Initializing and starting the application...")
