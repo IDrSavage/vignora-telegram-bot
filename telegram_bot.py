@@ -1296,19 +1296,19 @@ def webhook():
             return jsonify({'error': 'No update data'}), 400
 
         logger.info("WEBHOOK RECEIVED: %s", str(data)[:1000])
-
         update = Update.de_json(data, application.bot)
 
-        # ✅ عالج التحديث الآن على نفس اللوب بدلاً من update_queue
-        fut = asyncio.run_coroutine_threadsafe(
-            application.process_update(update),
-            loop
-        )
+        # ✅ أرسل المعالجة للّوب الخلفي بدون انتظارها (Fire-and-Forget)
         try:
-            fut.result(timeout=15)
-            logger.info("WEBHOOK PROCESSED update_id=%s", data.get("update_id"))
+            asyncio.run_coroutine_threadsafe(
+                application.process_update(update),
+                loop
+            )
+            logger.info("WEBHOOK DISPATCHED update_id=%s", data.get("update_id"))
         except Exception as e:
-            logger.error("WEBHOOK PROCESSING FAILED: %s", e, exc_info=True)
+            logger.error("Failed to dispatch update to loop: %s", e, exc_info=True)
+
+        # رجّع 200 فورًا عشان تيليجرام ما يعيد الإرسال
         return jsonify({'status': 'ok'}), 200
 
     except Exception as e:
@@ -1421,7 +1421,16 @@ def ensure_initialized():
                 except Exception as e:
                     logger.warning("PROBE reply failed: %s", e)
             
-            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=99)
+            application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=-100)
+            
+            # Add error handler for logging
+            async def _log_ptb_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+                try:
+                    logger.exception("Handler exception", exc_info=context.error)
+                except Exception:
+                    logger.error("Handler exception (no context.error?)")
+            
+            application.add_error_handler(_log_ptb_error)
             
             # ✅ Initialize and start the application properly
             logger.info("Initializing and starting the application...")
