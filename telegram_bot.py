@@ -278,8 +278,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🦷 **متوفر الآن:** أسئلة طب الأسنان\n\n"
             "🌟 More medical specialties coming soon!\n"
             "🌟 المزيد من التخصصات الطبية قريباً!\n\n"
-            "To get started, please share your phone number.\n"
-            "للبدء، يرجى مشاركة رقم جوالك."
+            "To get started, please click the button below to share your phone number.\n"
+            "للبدء، يرجى النقر على الزر أدناه لمشاركة رقم الجوال."
         )
         
         await update.message.reply_text(welcome_message, reply_markup=reply_markup)
