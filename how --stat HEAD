@@ -1,0 +1,5 @@
+[33m0f97f57[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m)[m Feat: Deploy to Singapore region and add performance logging
+[33m54a0c16[m change server of cloud run to singapore
+[33mc855032[m Feat: Deploy to Singapore region and add performance logging
+[33mae47e5c[m cloudbuild.yaml edit
+[33m80b4179[m Fix: Resolve bot initialization race condition for Cloud Run

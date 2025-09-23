@@ -23,7 +23,7 @@ from flask import Flask, request, jsonify
 # تحميل متغيرات البيئة
 
 # تعيين المتغيرات الثابتة - مطلوبة من ملف .env
-TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
+TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
 SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Vignora")
@@ -1298,23 +1298,16 @@ def webhook():
         # Create update object
         update = Update.de_json(update_data, application.bot)
         
-        # Process the update in the global event loop
-        future = asyncio.run_coroutine_threadsafe(
-            application.process_update(update),
-            loop
-        )
+        # ادفع التحديث لطابور التطبيق (لا تنتظر التنفيذ)
+        loop.call_soon_threadsafe(application.update_queue.put_nowait, update)
         
-        # Wait for completion (with timeout)
-        try:
-            future.result(timeout=20)  # 20 second timeout
-            return jsonify({'status': 'ok'}), 200
-        except asyncio.TimeoutError:
-            logger.warning("Update processing timed out")
-            return jsonify({'error': 'Processing timeout'}), 500
+        # رجّع فورًا 200 لتجنّب أي تايم أوت
+        return jsonify({'status': 'ok'}), 200
             
     except Exception as e:
         logger.error("Error in webhook endpoint: %s", e, exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        # مؤقتًا خليه 200 عشان تيليجرام ما يفصل الويبهوك
+        return jsonify({'error': str(e)}), 200
 
 # process_update function removed - now handled directly in webhook endpoint
 
@@ -1414,12 +1407,21 @@ def ensure_initialized():
             except Exception as e:
                 logger.warning("Could not add admin handlers: %s", e)
             
-            # ✅ Skip application.initialize() to avoid hanging in Cloud Run
-            logger.warning("⚠️ Skipping application.initialize() due to repeated timeouts.")
+            # ✅ Initialize and start the application properly
+            logger.info("Initializing and starting the application...")
+            
+            # شغّل initialize + start على اللوب الخلفي
+            f1 = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
+            f1.result(timeout=30)
+            logger.info("✅ Application initialized successfully.")
+            
+            f2 = asyncio.run_coroutine_threadsafe(application.start(), loop)
+            f2.result(timeout=30)
+            logger.info("✅ Application started successfully.")
             
             _initialized = True
             app_ready.set()
-            logger.info("✅ Bot marked initialized (handlers added, token check passed).")
+            logger.info("✅ Bot fully initialized and running.")
             
             # تحقق من التوكن (غير قاتل) - سيتم فحصه عبر /ping-telegram
             logger.info("✅ Bot ready. Use /ping-telegram endpoint to test Telegram connectivity.")
