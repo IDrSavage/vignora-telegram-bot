@@ -1285,29 +1285,27 @@ def ping_telegram():
 def webhook():
     """Webhook endpoint for Telegram updates"""
     try:
-        # Check if app is ready
+        # لو البوت مو جاهز، رجّع 503 عشان تيليجرام يعيد الإرسال
         if not app_ready.is_set():
-            # This can happen if a request comes in during a cold start before initialization is complete.
             logger.warning("Bot not ready yet, returning 503.")
             return jsonify({'error': 'Bot not ready'}), 503
-        # Get the update from Telegram
-        update_data = request.get_json()
-        if not update_data:
+
+        data = request.get_json()
+        if not data:
             return jsonify({'error': 'No update data'}), 400
-        
-        # Create update object
-        update = Update.de_json(update_data, application.bot)
-        
-        # ادفع التحديث لطابور التطبيق (لا تنتظر التنفيذ)
+
+        update = Update.de_json(data, application.bot)
+
+        # أرمي التحديث في طابور PTB (Non-blocking)
         loop.call_soon_threadsafe(application.update_queue.put_nowait, update)
-        
-        # رجّع فورًا 200 لتجنّب أي تايم أوت
+
+        # جاهزين → 200
         return jsonify({'status': 'ok'}), 200
-            
+
     except Exception as e:
         logger.error("Error in webhook endpoint: %s", e, exc_info=True)
-        # مؤقتًا خليه 200 عشان تيليجرام ما يفصل الويبهوك
-        return jsonify({'error': str(e)}), 200
+        # فشل حقيقي → 500 عشان تيليجرام يعيد المحاولة
+        return jsonify({'error': str(e)}), 500
 
 # process_update function removed - now handled directly in webhook endpoint
 
