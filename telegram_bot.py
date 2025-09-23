@@ -103,7 +103,7 @@ def check_user_exists(telegram_id: int):
 
 @time_it_sync
 def save_user_data(telegram_id: int, username: str, first_name: str, last_name: str, phone_number: str, language_code: str):
-    """حفظ بيانات المستخدم في قاعدة البيانات"""
+    """حفظ أو تحديث بيانات المستخدم في قاعدة البيانات (upsert)"""
     try:
         user_data = {
             'telegram_id': telegram_id,
@@ -116,8 +116,8 @@ def save_user_data(telegram_id: int, username: str, first_name: str, last_name: 
             'last_interaction': 'now()'
         }
         
-        response = supabase.table('target_users').insert(user_data).execute()
-        logger.info("User saved successfully: %s", telegram_id)
+        supabase.table('target_users').upsert(user_data, on_conflict='telegram_id').execute()
+        logger.info("User saved/updated successfully: %s", telegram_id)
         return True
     except Exception as e:
         logger.warning("Could not save user data for telegram_id %s: %s", telegram_id, e)
@@ -179,16 +179,12 @@ def get_user_stats(telegram_id: int):
 
 @time_it_sync
 def get_user_answered_questions(telegram_id: int):
-    """جلب الأسئلة التي أجاب عليها المستخدم"""
+    """جلب الأسئلة التي أجاب عليها المستخدم (بدون head)."""
     try:
-        # محاولة استخدام count للحصول على جميع الأسئلة
-        response = supabase.table('user_answers_bot').select('question_id', count='exact').eq('user_id', telegram_id).execute()
-        if response.data:
-            count = len(response.data)
-            logger.info("User %s answered %s questions", telegram_id, count)
-            return [answer['question_id'] for answer in response.data]
-        logger.info("User %s answered 0 questions", telegram_id)
-        return []
+        response = supabase.table('user_answers_bot').select('question_id').eq('user_id', telegram_id).execute()
+        rows = response.data or []
+        logger.info("User %s answered %s questions", telegram_id, len(rows))
+        return [answer['question_id'] for answer in rows if 'question_id' in answer]
     except Exception as e:
         logger.warning("Could not fetch user answers for telegram_id %s: %s", telegram_id, e)
         return []
@@ -197,47 +193,49 @@ def get_user_answered_questions(telegram_id: int):
 def get_total_questions_count():
     """جلب عدد الأسئلة الكلي في قاعدة البيانات بدون الاعتماد على RPC."""
     try:
-        # Fast count without downloading rows
-        resp = supabase.table('questions').select('id', count='exact', head=True).execute()
-        if getattr(resp, 'count', None) is not None:
+        resp = supabase.table('questions').select('id', count='exact').limit(1).execute()
+        if hasattr(resp, 'count') and resp.count is not None:
             return resp.count
-        # Fallback (slower): limited fetch
-        resp2 = supabase.table('questions').select('id').limit(10000).execute()
-        return len(resp2.data or [])
+        # Fallback minimal
+        return len(resp.data or [])
     except Exception as e:
         logger.error("Could not get total questions count (fallback): %s", e)
         return 0
 
 @time_it_sync
 def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
-    """جلب أحدث سؤال من قاعدة البيانات (غير مجاب عليه من قبل المستخدم)"""
+    """جلب سؤال عشوائي من قاعدة البيانات بدون RPC مع استثناء المجاب عليها."""
     try:
-        # إذا كان هناك معرف مستخدم، نستثني الأسئلة المجاب عليها
-        if telegram_id:
-            # If answered_ids are not provided, fetch them. This avoids double-fetching.
-            if answered_ids is None:
-                answered_ids = get_user_answered_questions(telegram_id)
+        if telegram_id and answered_ids is None:
+            answered_ids = get_user_answered_questions(telegram_id)
+        answered_ids = answered_ids or []
 
-            logger.info("User %s has answered %s questions. Excluding them.", telegram_id, len(answered_ids))
-            # Call the RPC function to get a truly random question, excluding answered ones.
-            response = supabase.rpc('get_random_question', {'p_exclude_ids': answered_ids}).execute()
-        else:
-            # For a non-user context, get any random question.
-            response = supabase.rpc('get_random_question', {'p_exclude_ids': []}).execute()
-        
-        if response.data and len(response.data) > 0:
-            question = response.data[0]
-            logger.info("Fetched question_id %s for user %s", question.get('id'), telegram_id)
-            return question
-        else:
+        query = supabase.table('questions').select(
+            'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+        )
+
+        # استثناء الأسئلة المجاب عليها إن وجدت
+        if answered_ids:
+            # PostgREST filter for NOT IN
+            ids_str = ','.join(str(i) for i in answered_ids)
+            query = query.filter('id', 'not.in', f'({ids_str})')
+
+        # اجلب مجموعة ثم اختر عشوائيًا على مستوى التطبيق
+        response = query.limit(50).execute()
+        rows = response.data or []
+        if not rows:
             if telegram_id and answered_ids:
                 logger.info("User %s has answered all available questions", telegram_id)
             else:
-                logger.warning("No questions found in database for fetch_random_question.")
+                logger.warning("No questions found in database for fetch_random_question (non-RPC).")
             return None
-            
+
+        import random
+        question = random.choice(rows)
+        logger.info("Fetched question_id %s for user %s (non-RPC)", question.get('id'), telegram_id)
+        return question
     except Exception as e:
-        logger.warning("Could not fetch question: %s", e)
+        logger.warning("Could not fetch question (non-RPC): %s", e)
         return None
 
 @time_it_sync
