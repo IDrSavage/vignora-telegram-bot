@@ -254,6 +254,7 @@ def get_latest_questions(limit: int = 10):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بداية التفاعل مع البوت"""
+    logger.info("START HANDLER fired for user_id=%s", update.effective_user.id if update.effective_user else None)
     user = update.effective_user
     telegram_id = user.id
     
@@ -1303,9 +1304,11 @@ def webhook():
             application.process_update(update),
             loop
         )
-        fut.result(timeout=15)
-
-        logger.info("WEBHOOK PROCESSED update_id=%s", data.get("update_id"))
+        try:
+            fut.result(timeout=15)
+            logger.info("WEBHOOK PROCESSED update_id=%s", data.get("update_id"))
+        except Exception as e:
+            logger.error("WEBHOOK PROCESSING FAILED: %s", e, exc_info=True)
         return jsonify({'status': 'ok'}), 200
 
     except Exception as e:
