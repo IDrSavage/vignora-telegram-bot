@@ -33,7 +33,7 @@ SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
 SUPABASE_KEY = (os.getenv("SUPABASE_KEY") or "").strip()
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Vignora")
 TELEGRAM_CHANNEL_LINK = os.getenv("TELEGRAM_CHANNEL_LINK", "https://t.me/Vignora")
-CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "true").lower() == "true"
+CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "false").lower() == "true"
 
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
@@ -278,6 +278,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🦷 **متوفر الآن:** أسئلة طب الأسنان\n\n"
             "🌟 More medical specialties coming soon!\n"
             "🌟 المزيد من التخصصات الطبية قريباً!\n\n"
+            f"📢 **Follow our channel for bot updates and new questions:**\n"
+            f"📢 **تابع قناتنا لمعرفة تحديثات البوت والأسئلة الجديدة:**\n"
+            f"🔗 {TELEGRAM_CHANNEL_LINK}\n\n"
             "To get started, please click the button below to share your phone number.\n"
             "للبدء، يرجى النقر على الزر أدناه لمشاركة رقم الجوال."
         )
@@ -377,6 +380,12 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
         "سيتم إضافة باقي التخصصات الطبية قريباً لتغطية جميع احتياجاتكم التعليمية.\n"
         "Other medical specialties will be added soon to cover all your educational needs.\n\n"
         
+        f"📢 **Stay Updated! Follow our channel:**\n"
+        f"📢 **ابق على اطلاع! تابع قناتنا:**\n"
+        f"🔗 {TELEGRAM_CHANNEL_LINK}\n"
+        f"Get notified about new questions and bot updates!\n"
+        f"احصل على إشعارات حول الأسئلة الجديدة وتحديثات البوت!\n\n"
+        
         "🎉 **هل أنت مستعد للبدء مع فيجنورا؟**\n"
         "**Are you ready to start with Vignora?**"
     )
@@ -398,13 +407,6 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تحديث آخر تفاعل
     asyncio.create_task(asyncio.to_thread(update_last_interaction, telegram_id))
     
-    # التحقق من الاشتراك في القناة
-    if CHANNEL_SUBSCRIPTION_REQUIRED:
-        is_subscribed = await check_channel_subscription(telegram_id, context.bot)
-        if not is_subscribed:
-            await show_subscription_required(update, context, is_new_user=False)
-            return
-    
     # جلب عدد الأسئلة المتاحة
     total_questions = await asyncio.to_thread(get_total_questions_count)
     
@@ -422,6 +424,9 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 **Questions Available:** {total_questions}\n\n"
         "🌟 **خطة التطوير:** سيتم إضافة باقي التخصصات الطبية قريباً\n"
         "**Development Plan:** Other medical specialties will be added soon\n\n"
+        f"📢 **Follow our channel for updates:**\n"
+        f"📢 **تابع قناتنا للحصول على التحديثات:**\n"
+        f"🔗 {TELEGRAM_CHANNEL_LINK}\n\n"
         "🚀 **اختر ما تريد القيام به:**\n"
         "**Choose what you want to do:**"
     )
@@ -438,13 +443,6 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user = query.from_user
     asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
-    
-    # التحقق من الاشتراك في القناة
-    if CHANNEL_SUBSCRIPTION_REQUIRED:
-        is_subscribed = await check_channel_subscription(user.id, context.bot)
-        if not is_subscribed:
-            await show_subscription_required(update, context, is_new_user=False)
-            return
 
     def get_stats_and_questions():
         """Fetch user stats and answered IDs without RPC."""
@@ -595,13 +593,6 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تحديث آخر تفاعل
     user = query.from_user
     asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
-    
-    # التحقق من الاشتراك في القناة
-    if CHANNEL_SUBSCRIPTION_REQUIRED:
-        is_subscribed = await check_channel_subscription(user.id, context.bot)
-        if not is_subscribed:
-            await show_subscription_required(update, context, is_new_user=False)
-            return
 
     def get_question_prerequisites_optimized():
         """Get total questions and answered IDs without RPC."""
@@ -616,14 +607,6 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_questions = await total_future
     answered_questions = await answered_future
     remaining_questions = total_questions - len(answered_questions)
-    
-    # التحقق من حد 10 أسئلة للمستخدمين الجدد
-    if len(answered_questions) >= 10:
-        # التحقق من الاشتراك مرة أخرى
-        is_subscribed = await check_channel_subscription(user.id, context.bot)
-        if not is_subscribed:
-            await show_subscription_required(update, context, is_new_user=True)
-            return
     
     question_data = await asyncio.to_thread(fetch_random_question, user.id, answered_ids=answered_questions)
     if not question_data:
