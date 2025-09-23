@@ -43,6 +43,10 @@ application = None
 # متغير عام لعميل Supabase
 supabase: Client = None
 
+# Simple in-memory cache for channel subscription checks
+_subscription_cache = {}
+_SUBSCRIPTION_TTL_SECONDS = 60
+
 def validate_environment():
     """Checks for required environment variables and raises a single, comprehensive error if any are missing."""
     required_vars = {
@@ -83,10 +87,15 @@ def time_it_sync(func):
 
 @time_it_sync
 def check_user_exists(telegram_id: int):
-    """التحقق من وجود المستخدم في قاعدة البيانات"""
+    """التحقق من وجود المستخدم في قاعدة البيانات (بدون تنزيل صفوف)."""
     try:
-        response = supabase.table('target_users').select('telegram_id').eq('telegram_id', telegram_id).execute()
-        return len(response.data) > 0
+        response = supabase.table('target_users').select('telegram_id', count='exact', head=True).eq('telegram_id', telegram_id).execute()
+        count_val = getattr(response, 'count', None)
+        if count_val is not None:
+            return count_val > 0
+        # Fallback: minimal fetch
+        response2 = supabase.table('target_users').select('telegram_id').eq('telegram_id', telegram_id).limit(1).execute()
+        return bool(response2.data)
     except Exception as e:
         logger.warning("Could not check user existence for telegram_id %s: %s", telegram_id, e)
         # في حالة فشل الاتصال، نفترض أن المستخدم جديد
@@ -186,24 +195,17 @@ def get_user_answered_questions(telegram_id: int):
 
 @time_it_sync
 def get_total_questions_count():
-    """جلب عدد الأسئلة الكلي في قاعدة البيانات (بطريقة محسنة)"""
+    """جلب عدد الأسئلة الكلي في قاعدة البيانات بدون الاعتماد على RPC."""
     try:
-        # The most reliable method is using an RPC function.
-        response = supabase.rpc('get_table_count', {'p_table_name': 'questions'}).execute()
-        if response.data:
-            count = response.data
-            logger.info("Got exact question count via RPC: %s", count)
-            return count
-        
-        # Fallback to the previous method if RPC fails
-        logger.warning("RPC count failed, falling back to select with count.")
-        response = supabase.table('questions').select('*', count='exact').execute()
-        if hasattr(response, 'count') and response.count is not None:
-            return response.count
-        
-        return 0
+        # Fast count without downloading rows
+        resp = supabase.table('questions').select('id', count='exact', head=True).execute()
+        if getattr(resp, 'count', None) is not None:
+            return resp.count
+        # Fallback (slower): limited fetch
+        resp2 = supabase.table('questions').select('id').limit(10000).execute()
+        return len(resp2.data or [])
     except Exception as e:
-        logger.error("Could not get total questions count: %s", e)
+        logger.error("Could not get total questions count (fallback): %s", e)
         return 0
 
 @time_it_sync
@@ -454,27 +456,9 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     def get_stats_and_questions():
-        """Wrapper function to run multiple sync DB calls in one thread."""
-        # Optimized database call using an RPC function
-        stats = {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
-        answered_questions = []
-        try:
-            response = supabase.rpc('get_user_stats_and_answered_ids', {'p_user_id': user.id}).execute()
-            stats_data = response.data[0] if response.data and response.data[0].get('total_answers') is not None else None
-
-            if stats_data:
-                total = stats_data.get('total_answers', 0)
-                correct = stats_data.get('correct_answers', 0)
-                answered_questions = stats_data.get('answered_ids', []) or [] # Ensure it's a list
-                accuracy = (correct / total) * 100 if total > 0 else 0
-                stats = {
-                    'total_answers': total,
-                    'correct_answers': correct,
-                    'accuracy': round(accuracy, 1)
-                }
-        except Exception as e:
-            logger.error("Could not fetch optimized user stats for user %s: %s", user.id, e)
-        
+        """Fetch user stats and answered IDs without RPC."""
+        stats = get_user_stats(user.id)
+        answered_questions = get_user_answered_questions(user.id)
         total_questions = get_total_questions_count()
         return stats, answered_questions, total_questions
 
@@ -613,17 +597,8 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     def get_question_prerequisites_optimized():
-        """Optimized wrapper to get total questions and answered IDs in one thread."""
-        answered_ids = []
-        try:
-            # Use the existing RPC to efficiently get answered question IDs
-            response = supabase.rpc('get_user_stats_and_answered_ids', {'p_user_id': user.id}).execute()
-            if response.data and response.data[0].get('answered_ids'):
-                answered_ids = response.data[0]['answered_ids']
-        except Exception as e:
-            logger.error("Could not fetch answered IDs via RPC for user %s: %s. Falling back.", user.id, e)
-            # Fallback to the old method in case of RPC failure
-            answered_ids = get_user_answered_questions(user.id)
+        """Get total questions and answered IDs without RPC."""
+        answered_ids = get_user_answered_questions(user.id)
         total_questions = get_total_questions_count()
         return total_questions, answered_ids
 
@@ -1043,6 +1018,12 @@ async def check_channel_subscription(user_id: int, bot):
         return True
     
     try:
+        # Cache key and check
+        now_ts = time.time()
+        cached = _subscription_cache.get(user_id)
+        if cached and now_ts - cached.get('ts', 0) < _SUBSCRIPTION_TTL_SECONDS:
+            return cached.get('ok', True)
+
         # إزالة @ من معرف القناة إذا كان موجوداً
         channel_id = TELEGRAM_CHANNEL_ID.lstrip('@')
         
@@ -1052,9 +1033,11 @@ async def check_channel_subscription(user_id: int, bot):
         # الحالات المقبولة: member, administrator, creator
         if member.status in ['member', 'administrator', 'creator']:
             logger.info("User %s is subscribed to channel @%s", user_id, channel_id)
+            _subscription_cache[user_id] = {'ok': True, 'ts': now_ts}
             return True
         else:
             logger.warning("User %s is NOT subscribed to channel @%s (status: %s)", user_id, channel_id, member.status)
+            _subscription_cache[user_id] = {'ok': False, 'ts': now_ts}
             return False
             
     except Exception as e:
@@ -1391,7 +1374,8 @@ def ensure_initialized():
                 connect_timeout=5,
                 read_timeout=20,
                 write_timeout=20,
-                pool_timeout=5
+                pool_timeout=10,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
             )
             
             application = Application.builder() \

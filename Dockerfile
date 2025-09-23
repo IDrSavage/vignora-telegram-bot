@@ -21,4 +21,4 @@ EXPOSE 8080
 # --threads 8: Use threads within the worker to handle concurrent I/O efficiently.
 # --timeout 300: Increase timeout to 300 seconds to handle bot initialization.
 # --preload: Preload the application for faster startup.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "300", "telegram_bot:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "300", "telegram_bot:app"]
