@@ -1304,15 +1304,12 @@ def webhook():
         logger.info("WEBHOOK RECEIVED: %s", str(data)[:1000])
         update = Update.de_json(data, application.bot)
 
-        # ✅ أرسل المعالجة للّوب الخلفي بدون انتظارها (Fire-and-Forget)
+        # ✅ مرّر التحديث إلى طابور PTB الداخلي ليستهلكه التطبيق
         try:
-            asyncio.run_coroutine_threadsafe(
-                application.process_update(update),
-                loop
-            )
-            logger.info("WEBHOOK DISPATCHED update_id=%s", data.get("update_id"))
+            loop.call_soon_threadsafe(application.update_queue.put_nowait, update)
+            logger.info("WEBHOOK ENQUEUED update_id=%s", data.get("update_id"))
         except Exception as e:
-            logger.error("Failed to dispatch update to loop: %s", e, exc_info=True)
+            logger.error("Failed to enqueue update to PTB queue: %s", e, exc_info=True)
 
         # رجّع 200 فورًا عشان تيليجرام ما يعيد الإرسال
         return jsonify({'status': 'ok'}), 200
