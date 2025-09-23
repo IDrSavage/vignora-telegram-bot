@@ -1294,11 +1294,18 @@ def webhook():
             logger.warning("Webhook hit with empty body.")
             return jsonify({'error': 'No update data'}), 400
 
-        logger.info("WEBHOOK RECEIVED: %s", str(data)[:1000])  # قصّ للطول
+        logger.info("WEBHOOK RECEIVED: %s", str(data)[:1000])
+
         update = Update.de_json(data, application.bot)
 
-        loop.call_soon_threadsafe(application.update_queue.put_nowait, update)
-        logger.info("WEBHOOK ENQUEUED update_id=%s", data.get("update_id"))
+        # ✅ عالج التحديث الآن على نفس اللوب بدلاً من update_queue
+        fut = asyncio.run_coroutine_threadsafe(
+            application.process_update(update),
+            loop
+        )
+        fut.result(timeout=15)
+
+        logger.info("WEBHOOK PROCESSED update_id=%s", data.get("update_id"))
         return jsonify({'status': 'ok'}), 200
 
     except Exception as e:

@@ -42,7 +42,7 @@ options:
   logging: CLOUD_LOGGING_ONLY
 # Substitutions for non-secret values
 substitutions:
-  _REGION: "ap-southeast-1" # <-- Changed to match Supabase region (Singapore)
+  _REGION: "asia-southeast1" # <-- Changed to GCP format for Singapore region
   _TELEGRAM_CHANNEL_ID: "@Vignora"
   _TELEGRAM_CHANNEL_LINK: "https://t.me/Vignora"
   _CHANNEL_SUBSCRIPTION_REQUIRED: "true"
