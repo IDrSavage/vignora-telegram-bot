@@ -4,7 +4,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.request import HTTPXRequest
 from threading import Thread
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, TypeHandler, filters
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
@@ -1430,6 +1430,14 @@ def ensure_initialized():
                     logger.warning("PROBE reply failed: %s", e)
             
             application.add_handler(MessageHandler(filters.ALL, _echo_probe), group=99)
+
+            # Low-priority tap to confirm dispatcher pipeline
+            async def _tap(update: object, context: ContextTypes.DEFAULT_TYPE):
+                try:
+                    logger.info("DISPATCH ENTER: type=%s", type(update))
+                except Exception:
+                    logger.info("DISPATCH ENTER: (type unknown)")
+            application.add_handler(TypeHandler(object, _tap), group=-1000)
             
             # Add error handler for logging
             async def _log_ptb_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
