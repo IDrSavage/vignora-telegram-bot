@@ -263,6 +263,41 @@ def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
                 return None
 
         logger.warning("No suitable question found after %s attempts for user %s", _MAX_RANDOM_FETCH_ATTEMPTS, telegram_id)
+
+        # محاولة احتياطية باستخدام عامل not.in على دفعات صغيرة
+        if answered_ids_set:
+            ids_list = list(answered_ids_set)
+            chunk_size = 500
+            for start in range(0, len(ids_list), chunk_size):
+                chunk = ids_list[start:start + chunk_size]
+                ids_str = ",".join(str(i) for i in chunk)
+                response = supabase.table('questions').select(
+                    'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+                ).filter('id', 'not.in', f'({ids_str})').limit(1).execute()
+                rows = response.data or []
+                if rows:
+                    question = rows[0]
+                    logger.info(
+                        "Fallback fetched question_id %s for user %s",
+                        question.get('id'),
+                        telegram_id
+                    )
+                    return question
+
+        # آخر محاولة: جلب سؤال واحد بدون شروط (قد يتكرر إذا لم تُحدّث القائمة)
+        response = supabase.table('questions').select(
+            'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+        ).limit(1).execute()
+        rows = response.data or []
+        if rows:
+            question = rows[0]
+            logger.info(
+                "Fallback (no filter) fetched question_id %s for user %s",
+                question.get('id'),
+                telegram_id
+            )
+            return question
+
         return None
     except Exception as e:
         logger.warning("Could not fetch question (non-RPC): %s", e)
