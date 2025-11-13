@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.request import HTTPXRequest
-from threading import Thread
+from threading import Thread, Lock
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, TypeHandler, filters
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -37,6 +37,15 @@ CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "fals
 
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
+
+# إعدادات التحكم في جلب الأسئلة وتقليل الاستعلامات البطيئة
+_DEFAULT_RANDOM_BATCH_SIZE = 100
+_MAX_RANDOM_FETCH_ATTEMPTS = 3
+_QUESTION_COUNT_TTL_SECONDS = 300
+
+# مخزن مؤقت لعدد الأسئلة لتقليل الاتصالات المتكررة مع Supabase
+_question_count_cache = {"value": None, "ts": 0.0}
+_question_count_lock: Lock = Lock()
 
 # متغير عام للتطبيق (مطلوب للويبهوك)
 application = None
@@ -200,38 +209,61 @@ def get_total_questions_count():
         logger.error("Could not get total questions count (fallback): %s", e)
         return 0
 
+
+def get_total_questions_count_cached(force_refresh: bool = False):
+    """إرجاع عدد الأسئلة مع تخزين مؤقت لتقليل عدد استعلامات Supabase."""
+    now_ts = time.time()
+    if not force_refresh:
+        with _question_count_lock:
+            cached_value = _question_count_cache.get("value")
+            cached_ts = _question_count_cache.get("ts", 0.0)
+        if cached_value is not None and (now_ts - cached_ts) < _QUESTION_COUNT_TTL_SECONDS:
+            return cached_value
+
+    latest_count = get_total_questions_count()
+    with _question_count_lock:
+        _question_count_cache["value"] = latest_count
+        _question_count_cache["ts"] = now_ts
+    return latest_count
+
+
 @time_it_sync
 def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
     """جلب سؤال عشوائي من قاعدة البيانات بدون RPC مع استثناء المجاب عليها."""
     try:
-        if telegram_id and answered_ids is None:
-            answered_ids = get_user_answered_questions(telegram_id)
-        answered_ids = answered_ids or []
+        answered_ids_set = set(answered_ids or [])
 
-        query = supabase.table('questions').select(
-            'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
-        )
+        if telegram_id and not answered_ids_set:
+            answered_ids_set = set(get_user_answered_questions(telegram_id))
 
-        # استثناء الأسئلة المجاب عليها إن وجدت
-        if answered_ids:
-            # PostgREST filter for NOT IN
-            ids_str = ','.join(str(i) for i in answered_ids)
-            query = query.filter('id', 'not.in', f'({ids_str})')
+        total_questions = None
 
-        # اجلب مجموعة ثم اختر عشوائيًا على مستوى التطبيق
-        response = query.limit(50).execute()
-        rows = response.data or []
-        if not rows:
-            if telegram_id and answered_ids:
-                logger.info("User %s has answered all available questions", telegram_id)
-            else:
-                logger.warning("No questions found in database for fetch_random_question (non-RPC).")
-            return None
+        for attempt in range(_MAX_RANDOM_FETCH_ATTEMPTS):
+            response = supabase.table('questions').select(
+                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+            ).order('random()').limit(_DEFAULT_RANDOM_BATCH_SIZE).execute()
 
-        import random
-        question = random.choice(rows)
-        logger.info("Fetched question_id %s for user %s (non-RPC)", question.get('id'), telegram_id)
-        return question
+            rows = response.data or []
+            for question in rows:
+                question_id = question.get('id')
+                if question_id and question_id not in answered_ids_set:
+                    logger.info(
+                        "Fetched question_id %s for user %s on attempt %s (non-RPC)",
+                        question_id,
+                        telegram_id,
+                        attempt + 1
+                    )
+                    return question
+
+            if total_questions is None:
+                total_questions = get_total_questions_count_cached()
+
+            if total_questions and len(answered_ids_set) >= total_questions:
+                logger.info("User %s has answered all available questions (cached check)", telegram_id)
+                return None
+
+        logger.warning("No suitable question found after %s attempts for user %s", _MAX_RANDOM_FETCH_ATTEMPTS, telegram_id)
+        return None
     except Exception as e:
         logger.warning("Could not fetch question (non-RPC): %s", e)
         return None
@@ -331,7 +363,7 @@ async def show_bot_introduction(update: Update, context: ContextTypes.DEFAULT_TY
     asyncio.create_task(asyncio.to_thread(update_last_interaction, telegram_id))
     
     # جلب عدد الأسئلة المتاحة
-    total_questions = await asyncio.to_thread(get_total_questions_count)
+    total_questions = await asyncio.to_thread(get_total_questions_count_cached)
     
     intro_message = (
         "🎯 **مرحباً بك في بوت فيجنورا للأسئلة الطبية!**\n"
@@ -408,7 +440,7 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(asyncio.to_thread(update_last_interaction, telegram_id))
     
     # جلب عدد الأسئلة المتاحة
-    total_questions = await asyncio.to_thread(get_total_questions_count)
+    total_questions = await asyncio.to_thread(get_total_questions_count_cached)
     
     keyboard = [
         [InlineKeyboardButton("Start Quiz / بدء الاختبار", callback_data="quiz")],
@@ -448,7 +480,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Fetch user stats and answered IDs without RPC."""
         stats = get_user_stats(user.id)
         answered_questions = get_user_answered_questions(user.id)
-        total_questions = get_total_questions_count()
+        total_questions = get_total_questions_count_cached()
         return stats, answered_questions, total_questions
 
     # اجلب إجابات المستخدم مرة واحدة ثم احسب كل شيء محليًا لتقليل عدد الطلبات
@@ -464,7 +496,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         accuracy = round(((correct / total) * 100) if total > 0 else 0, 1)
         stats_loc = {'total_answers': total, 'correct_answers': correct, 'accuracy': accuracy}
         answered_ids_loc = [r['question_id'] for r in rows if 'question_id' in r]
-        total_questions_loc = get_total_questions_count()
+        total_questions_loc = get_total_questions_count_cached()
         return stats_loc, answered_ids_loc, total_questions_loc
 
     stats, answered_questions, total_questions = await asyncio.to_thread(_fetch_answers_and_compute)
@@ -594,24 +626,28 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
 
-    def get_question_prerequisites_optimized():
-        """Get total questions and answered IDs without RPC."""
-        answered_ids = get_user_answered_questions(user.id)
-        total_questions = get_total_questions_count()
-        return total_questions, answered_ids
+    answered_ids_set = context.user_data.get("answered_ids")
+    if answered_ids_set is None:
+        answered_list = await asyncio.to_thread(get_user_answered_questions, user.id)
+        answered_ids_set = set(answered_list)
+        context.user_data["answered_ids"] = answered_ids_set
 
-    # نفّذ الحسابين بالتوازي لتقليل الزمن الإجمالي
-    loop_local = asyncio.get_running_loop()
-    total_future = loop_local.run_in_executor(None, get_total_questions_count)
-    answered_future = loop_local.run_in_executor(None, get_user_answered_questions, user.id)
-    total_questions = await total_future
-    answered_questions = await answered_future
-    remaining_questions = total_questions - len(answered_questions)
-    
-    question_data = await asyncio.to_thread(fetch_random_question, user.id, answered_ids=answered_questions)
+    total_questions = await asyncio.to_thread(get_total_questions_count_cached)
+    remaining_questions = max(total_questions - len(answered_ids_set), 0)
+
+    if remaining_questions <= 0:
+        await query.edit_message_text(
+            "🎉 مبروك! لقد أجبت على جميع الأسئلة المتاحة!\n"
+            "Congratulations! You've answered all available questions!\n\n"
+            "سيتم إضافة المزيد من الأسئلة قريباً.\n"
+            "More questions will be added soon."
+        )
+        return
+
+    question_data = await asyncio.to_thread(fetch_random_question, user.id, list(answered_ids_set))
     if not question_data:
         # التحقق من سبب عدم وجود أسئلة
-        if answered_questions and len(answered_questions) > 0:
+        if answered_ids_set:
             await query.edit_message_text(
                 "🎉 مبروك! لقد أجبت على جميع الأسئلة المتاحة!\n"
                 "Congratulations! You've answered all available questions!\n\n"
@@ -688,6 +724,13 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # حفظ الإجابة المختارة للعودة إليها
     context.user_data["last_selected_answer"] = selected_answer
+
+    if question_id is not None:
+        answered_ids_set = context.user_data.setdefault("answered_ids", set())
+        try:
+            answered_ids_set.add(int(question_id))
+        except (ValueError, TypeError):
+            answered_ids_set.add(question_id)
     
     # تحديد ما إذا كانت الإجابة صحيحة
     is_correct = selected_answer == correct_answer
@@ -890,7 +933,7 @@ async def db_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض معلومات قاعدة البيانات"""
     try:
         # معلومات الأسئلة
-        questions_count = get_total_questions_count()
+        questions_count = get_total_questions_count_cached(force_refresh=True)
         
         # معلومات المستخدمين
         users_response = supabase.table('target_users').select('telegram_id', count='exact').execute()
