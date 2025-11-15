@@ -45,6 +45,23 @@ QUESTION_BUFFER_TASK_KEY = "question_buffer_task"
 PREFETCH_EXCLUDED_KEY = "prefetch_excluded_ids"
 RECENTLY_ANSWERED_KEY = "recently_answered_ids"
 
+# Cache for total questions count (correct-only)
+TOTAL_QUESTIONS_CACHE = {"value": None, "ts": 0}
+TOTAL_TTL = 60  # مدة صلاحية كاش عدد الأسئلة (بالثواني)
+
+# Session TTL (مثلاً 12 ساعة)
+SESSION_TTL_SECONDS = 12 * 60 * 60  # تقدر تخليها 24 * 60 * 60 لو تبي يوم كامل
+
+
+def is_session_stale(user_data: dict) -> bool:
+    """يتأكد هل جلسة المستخدم قديمة وتحتاج إعادة مزامنة من قاعدة البيانات."""
+    import time
+
+    ts = user_data.get("session_synced_at")
+    if not ts:
+        return True
+    return (time.time() - ts) > SESSION_TTL_SECONDS
+
 # متغير عام للتطبيق (مطلوب للويبهوك)
 application = None
 # متغير عام لعميل Supabase
@@ -196,22 +213,34 @@ def get_user_answered_questions(telegram_id: int):
 
 @time_it_sync
 def get_total_questions_count():
-    """جلب عدد الأسئلة الكلي في قاعدة البيانات بدون الاعتماد على RPC."""
+    """جلب عدد الأسئلة الكلي (فقط correct) مع كاش بسيط لمدة 60 ثانية."""
+    now = time.time()
+
+    # لو عندنا قيمة كاش وما عدا عليها أكثر من TOTAL_TTL → رجّعها مباشرة
+    if TOTAL_QUESTIONS_CACHE["value"] is not None and now - TOTAL_QUESTIONS_CACHE["ts"] < TOTAL_TTL:
+        return TOTAL_QUESTIONS_CACHE["value"]
+
     try:
         resp = (
             supabase.table('questions')
             .select('id', count='exact')
-            .eq('ai_review_status', 'correct')
+            .eq('ai_review_status', 'correct')  # مهم: فقط الأسئلة الـ correct
             .limit(1)
             .execute()
         )
         if hasattr(resp, 'count') and resp.count is not None:
+            TOTAL_QUESTIONS_CACHE["value"] = resp.count
+            TOTAL_QUESTIONS_CACHE["ts"] = now
             return resp.count
-        # Fallback minimal
-        return len(resp.data or [])
+
+        val = len(resp.data or [])
+        TOTAL_QUESTIONS_CACHE["value"] = val
+        TOTAL_QUESTIONS_CACHE["ts"] = now
+        return val
     except Exception as e:
         logger.error("Could not get total questions count (fallback): %s", e)
-        return 0
+        # لو صار خطأ، رجّع آخر قيمة معروفة أو 0
+        return TOTAL_QUESTIONS_CACHE["value"] or 0
 
 @time_it_sync
 def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
@@ -694,17 +723,48 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
 
-    # نفّذ الحسابين بالتوازي لتقليل الزمن الإجمالي
     loop_local = asyncio.get_running_loop()
-    total_future = loop_local.run_in_executor(None, get_total_questions_count)
-    answered_future = loop_local.run_in_executor(None, get_user_answered_questions, user.id)
-    total_questions = await total_future
-    answered_questions = await answered_future
-    remaining_questions = total_questions - len(answered_questions)
+
+    # نحسب عدد الأسئلة وإجابات اليوزر إما أول مرة أو إذا الجلسة قديمة
+    if ("session_initialized" not in context.user_data) or is_session_stale(context.user_data):
+        # جلسة جديدة أو قديمة تحتاج إعادة مزامنة من قاعدة البيانات
+        total_future = loop_local.run_in_executor(None, get_total_questions_count)
+        answered_future = loop_local.run_in_executor(None, get_user_answered_questions, user.id)
+
+        total_questions = await total_future
+        answered_questions = await answered_future
+
+        answered_ids_set = set(answered_questions)
+
+        context.user_data["total_questions"] = total_questions
+        context.user_data["answered_ids"] = answered_ids_set
+        context.user_data["remaining_questions"] = total_questions - len(answered_ids_set)
+        context.user_data["session_initialized"] = True
+
+        # نخزن وقت آخر مزامنة للجلسة
+        import time
+
+        context.user_data["session_synced_at"] = time.time()
+
+        # تنظيف البافر لو كان فيه بيانات قديمة
+        context.user_data.pop(QUESTION_BUFFER_KEY, None)
+        context.user_data.pop(PREFETCH_EXCLUDED_KEY, None)
+        context.user_data.pop(RECENTLY_ANSWERED_KEY, None)
+
+    else:
+        # الجلسة لا تزال حديثة → نستخدم الكاش من user_data
+        total_questions = context.user_data.get("total_questions", 0)
+        answered_ids_set = context.user_data.get("answered_ids", set())
+        answered_questions = list(answered_ids_set)
+
+    remaining_questions = context.user_data.get(
+        "remaining_questions",
+        total_questions - len(answered_questions)
+    )
     
     question_buffer = context.user_data.setdefault(QUESTION_BUFFER_KEY, [])
     recently_answered = context.user_data.get(RECENTLY_ANSWERED_KEY, [])
-    base_fetch_excluded = set(answered_questions)
+    base_fetch_excluded = set(answered_ids_set)
     base_fetch_excluded.update(
         qid for qid in recently_answered if isinstance(qid, int)
     )
@@ -824,6 +884,19 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # حفظ إجابة المستخدم (Fire-and-forget لتقليل زمن الاستجابة)
     asyncio.create_task(asyncio.to_thread(save_user_answer, user.id, question_id, selected_answer, correct_answer, is_correct))
     
+    # تحديث الأسئلة المجابة والمتبقي في الجلسة الحالية
+    try:
+        answered_ids_set = context.user_data.setdefault("answered_ids", set())
+        if isinstance(question_id, int) and question_id not in answered_ids_set:
+            answered_ids_set.add(question_id)
+            if "remaining_questions" in context.user_data:
+                context.user_data["remaining_questions"] = max(
+                    0,
+                    context.user_data["remaining_questions"] - 1,
+                )
+    except Exception as e:
+        logger.warning("Could not update session answered/remaining cache: %s", e)
+
     # إنشاء رسالة النتيجة والأزرار باستخدام الدالة المساعدة
     result_message, reply_markup = await _create_result_message_and_keyboard(context)
     await query.edit_message_text(result_message, reply_markup=reply_markup, parse_mode='Markdown')
