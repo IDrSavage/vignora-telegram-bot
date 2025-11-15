@@ -38,6 +38,13 @@ CHANNEL_SUBSCRIPTION_REQUIRED = os.getenv("CHANNEL_SUBSCRIPTION_REQUIRED", "fals
 # متغير للتحكم في إظهار التاريخ (يمكن تغييره لاحقاً)
 SHOW_DATE_ADDED = False
 
+# إعدادات التخزين المؤقت للأسئلة
+MAX_PREFETCH_QUESTIONS = 5
+QUESTION_BUFFER_KEY = "prefetched_questions"
+QUESTION_BUFFER_TASK_KEY = "question_buffer_task"
+PREFETCH_EXCLUDED_KEY = "prefetch_excluded_ids"
+RECENTLY_ANSWERED_KEY = "recently_answered_ids"
+
 # متغير عام للتطبيق (مطلوب للويبهوك)
 application = None
 # متغير عام لعميل Supabase
@@ -191,7 +198,13 @@ def get_user_answered_questions(telegram_id: int):
 def get_total_questions_count():
     """جلب عدد الأسئلة الكلي في قاعدة البيانات بدون الاعتماد على RPC."""
     try:
-        resp = supabase.table('questions').select('id', count='exact').limit(1).execute()
+        resp = (
+            supabase.table('questions')
+            .select('id', count='exact')
+            .eq('ai_review_status', 'correct')
+            .limit(1)
+            .execute()
+        )
         if hasattr(resp, 'count') and resp.count is not None:
             return resp.count
         # Fallback minimal
@@ -208,8 +221,12 @@ def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
             answered_ids = get_user_answered_questions(telegram_id)
         answered_ids = answered_ids or []
 
-        query = supabase.table('questions').select(
-            'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+        query = (
+            supabase.table('questions')
+            .select(
+                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+            )
+            .eq('ai_review_status', 'correct')
         )
 
         # استثناء الأسئلة المجاب عليها إن وجدت
@@ -236,13 +253,87 @@ def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
         logger.warning("Could not fetch question (non-RPC): %s", e)
         return None
 
+
+async def _fill_question_buffer(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """ملء المخزن المؤقت بالأسئلة حتى الحد الأقصى المحدد."""
+    buffer = context.user_data.setdefault(QUESTION_BUFFER_KEY, [])
+    excluded_store = context.user_data.setdefault(PREFETCH_EXCLUDED_KEY, set())
+
+    while len(buffer) < MAX_PREFETCH_QUESTIONS:
+        excluded_ids = set(excluded_store)
+        excluded_ids.update(
+            question.get('id')
+            for question in buffer
+            if isinstance(question, dict) and question.get('id') is not None
+        )
+
+        try:
+            question = await asyncio.to_thread(
+                fetch_random_question,
+                user_id,
+                answered_ids=list(excluded_ids) if excluded_ids else None,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Buffer fill failed for user %s: %s", user_id, e)
+            break
+
+        if not question:
+            break
+
+        buffer.append(question)
+        question_id = question.get('id')
+        if question_id is not None:
+            excluded_store.add(question_id)
+
+
+def _schedule_question_buffer_fill(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    base_excluded_ids: set,
+):
+    """تهيئة وتشغيل مهمة ملء المخزن المؤقت بالأسئلة."""
+    buffer = context.user_data.setdefault(QUESTION_BUFFER_KEY, [])
+    excluded_store = context.user_data.setdefault(PREFETCH_EXCLUDED_KEY, set())
+    excluded_store.clear()
+    for question_id in base_excluded_ids:
+        if question_id is not None:
+            excluded_store.add(question_id)
+    for question in buffer:
+        if isinstance(question, dict):
+            qid = question.get('id')
+            if qid is not None:
+                excluded_store.add(qid)
+
+    existing_task = context.user_data.get(QUESTION_BUFFER_TASK_KEY)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+
+    async def runner():
+        try:
+            await _fill_question_buffer(context, user_id)
+        except asyncio.CancelledError:
+            logger.debug("Question buffer fill cancelled for user %s", user_id)
+        finally:
+            context.user_data.pop(QUESTION_BUFFER_TASK_KEY, None)
+
+    context.user_data[QUESTION_BUFFER_TASK_KEY] = asyncio.create_task(runner())
+
 @time_it_sync
 def get_latest_questions(limit: int = 10):
     """جلب أحدث الأسئلة من قاعدة البيانات"""
     try:
-        response = supabase.table('questions').select(
-            'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
-        ).order('date_added', desc=True).limit(limit).execute()
+        response = (
+            supabase.table('questions')
+            .select(
+                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
+            )
+            .eq('ai_review_status', 'correct')
+            .order('date_added', desc=True)
+            .limit(limit)
+            .execute()
+        )
         
         if response.data:
             logger.info("Fetched %s latest questions", len(response.data))
@@ -497,6 +588,15 @@ async def end_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # مسح بيانات السؤال الحالي
     if "current_question" in context.user_data:
         del context.user_data["current_question"]
+    if "current_question_data" in context.user_data:
+        del context.user_data["current_question_data"]
+
+    buffer_task = context.user_data.pop(QUESTION_BUFFER_TASK_KEY, None)
+    if buffer_task and not buffer_task.done():
+        buffer_task.cancel()
+    context.user_data.pop(QUESTION_BUFFER_KEY, None)
+    context.user_data.pop(PREFETCH_EXCLUDED_KEY, None)
+    context.user_data.pop(RECENTLY_ANSWERED_KEY, None)
     
     # عرض رسالة إنهاء الجلسة
     end_message = (
@@ -594,12 +694,6 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     asyncio.create_task(asyncio.to_thread(update_last_interaction, user.id))
 
-    def get_question_prerequisites_optimized():
-        """Get total questions and answered IDs without RPC."""
-        answered_ids = get_user_answered_questions(user.id)
-        total_questions = get_total_questions_count()
-        return total_questions, answered_ids
-
     # نفّذ الحسابين بالتوازي لتقليل الزمن الإجمالي
     loop_local = asyncio.get_running_loop()
     total_future = loop_local.run_in_executor(None, get_total_questions_count)
@@ -608,7 +702,22 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answered_questions = await answered_future
     remaining_questions = total_questions - len(answered_questions)
     
-    question_data = await asyncio.to_thread(fetch_random_question, user.id, answered_ids=answered_questions)
+    question_buffer = context.user_data.setdefault(QUESTION_BUFFER_KEY, [])
+    recently_answered = context.user_data.get(RECENTLY_ANSWERED_KEY, [])
+    base_fetch_excluded = set(answered_questions)
+    base_fetch_excluded.update(
+        qid for qid in recently_answered if isinstance(qid, int)
+    )
+    question_data = None
+
+    if question_buffer:
+        question_data = question_buffer.pop(0)
+    else:
+        question_data = await asyncio.to_thread(
+            fetch_random_question,
+            user.id,
+            answered_ids=list(base_fetch_excluded) if base_fetch_excluded else None,
+        )
     if not question_data:
         # التحقق من سبب عدم وجود أسئلة
         if answered_questions and len(answered_questions) > 0:
@@ -626,6 +735,18 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Please try again later."
             )
         return
+
+    question_id = question_data.get('id')
+    base_excluded_ids = set(base_fetch_excluded)
+    if isinstance(question_id, int):
+        base_excluded_ids.add(question_id)
+    base_excluded_ids.update(
+        question.get('id')
+        for question in question_buffer
+        if isinstance(question, dict) and isinstance(question.get('id'), int)
+    )
+
+    _schedule_question_buffer_fill(context, user.id, base_excluded_ids)
     
     # تنسيق السؤال مع عدد الأسئلة المتبقية
     date_added_text = ""
@@ -689,6 +810,14 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # حفظ الإجابة المختارة للعودة إليها
     context.user_data["last_selected_answer"] = selected_answer
     
+    if isinstance(question_id, int):
+        recent_list = context.user_data.setdefault(RECENTLY_ANSWERED_KEY, [])
+        if question_id in recent_list:
+            recent_list.remove(question_id)
+        recent_list.append(question_id)
+        if len(recent_list) > 50:
+            del recent_list[0:len(recent_list) - 50]
+
     # تحديد ما إذا كانت الإجابة صحيحة
     is_correct = selected_answer == correct_answer
     
@@ -860,15 +989,32 @@ async def test_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختبار عدد الأسئلة الحقيقي"""
     try:
         # طريقة 1: استخدام count
-        count_response = supabase.table('questions').select('*', count='exact').execute()
+        count_response = (
+            supabase.table('questions')
+            .select('*', count='exact')
+            .eq('ai_review_status', 'correct')
+            .execute()
+        )
         count_method = count_response.count if hasattr(count_response, 'count') else 'Not available'
         
         # طريقة 2: جلب جميع الأسئلة
-        all_response = supabase.table('questions').select('id').execute()
+        all_response = (
+            supabase.table('questions')
+            .select('id')
+            .eq('ai_review_status', 'correct')
+            .execute()
+        )
         all_method = len(all_response.data)
         
         # طريقة 3: جلب آخر 1000 سؤال
-        limit_response = supabase.table('questions').select('id').order('id', desc=True).limit(1000).execute()
+        limit_response = (
+            supabase.table('questions')
+            .select('id')
+            .eq('ai_review_status', 'correct')
+            .order('id', desc=True)
+            .limit(1000)
+            .execute()
+        )
         limit_method = len(limit_response.data)
         
         test_message = (
