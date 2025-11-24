@@ -244,42 +244,33 @@ def get_total_questions_count():
 
 @time_it_sync
 def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
-    """جلب سؤال عشوائي من قاعدة البيانات بدون RPC مع استثناء المجاب عليها."""
+    """جلب سؤال عشوائي من قاعدة البيانات باستخدام RPC مع استثناء المجاب عليها."""
     try:
         if telegram_id and answered_ids is None:
             answered_ids = get_user_answered_questions(telegram_id)
-        answered_ids = answered_ids or []
+        if answered_ids is None:
+            answered_ids = []
+        elif not isinstance(answered_ids, list):
+            answered_ids = list(answered_ids)
 
-        query = (
-            supabase.table('questions')
-            .select(
-                'id, question, option_a, option_b, option_c, option_d, correct_answer, explanation, date_added'
-            )
-            .eq('ai_review_status', 'correct')
-        )
-
-        # استثناء الأسئلة المجاب عليها إن وجدت
-        if answered_ids:
-            # PostgREST filter for NOT IN
-            ids_str = ','.join(str(i) for i in answered_ids)
-            query = query.filter('id', 'not.in', f'({ids_str})')
-
-        # اجلب مجموعة ثم اختر عشوائيًا على مستوى التطبيق
-        response = query.limit(50).execute()
+        payload = {"excluded_ids": answered_ids or None}
+        response = supabase.rpc("get_random_question", payload).execute()
         rows = response.data or []
+        if isinstance(rows, dict):
+            rows = [rows]
+
         if not rows:
             if telegram_id and answered_ids:
-                logger.info("User %s has answered all available questions", telegram_id)
+                logger.info("User %s has no more questions available via RPC", telegram_id)
             else:
-                logger.warning("No questions found in database for fetch_random_question (non-RPC).")
+                logger.warning("No questions found in database for fetch_random_question (RPC).")
             return None
 
-        import random
-        question = random.choice(rows)
-        logger.info("Fetched question_id %s for user %s (non-RPC)", question.get('id'), telegram_id)
+        question = rows[0]
+        logger.info("Fetched question_id %s for user %s (RPC)", question.get('id'), telegram_id)
         return question
     except Exception as e:
-        logger.warning("Could not fetch question (non-RPC): %s", e)
+        logger.warning("Could not fetch question (RPC): %s", e)
         return None
 
 
