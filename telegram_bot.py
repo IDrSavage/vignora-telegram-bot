@@ -804,20 +804,29 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SHOW_DATE_ADDED:
         date_added_text = f"📅 **Added:** {format_timestamp(question_data.get('date_added'))}\n\n"
     
+    option_a = question_data.get('option_a', '')
+    option_b = question_data.get('option_b', '')
+    option_c = question_data.get('option_c', '')
+    option_d = question_data.get('option_d', '')
+
     question_text = (
         f"📚 **Question / السؤال:**\n"
         f"{question_data.get('question', 'No question')}\n\n"
         f"📊 **Remaining:** {remaining_questions} / {total_questions}\n\n"
         f"{date_added_text}"
-        "**Options / الخيارات:**"
+        "**Options / الخيارات:**\n"
+        f"A) {option_a}\n"
+        f"B) {option_b}\n"
+        f"C) {option_c}\n"
+        f"D) {option_d}"
     )
     
     # إنشاء أزرار الخيارات - بدون ترجمة
     keyboard = [
-        [InlineKeyboardButton(f"A: {question_data.get('option_a', '')}", callback_data="answer_A")],
-        [InlineKeyboardButton(f"B: {question_data.get('option_b', '')}", callback_data="answer_B")],
-        [InlineKeyboardButton(f"C: {question_data.get('option_c', '')}", callback_data="answer_C")],
-        [InlineKeyboardButton(f"D: {question_data.get('option_d', '')}", callback_data="answer_D")],
+        [InlineKeyboardButton("A", callback_data="answer_A")],
+        [InlineKeyboardButton("B", callback_data="answer_B")],
+        [InlineKeyboardButton("C", callback_data="answer_C")],
+        [InlineKeyboardButton("D", callback_data="answer_D")],
         [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
     ]
     
@@ -830,10 +839,10 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # حفظ بيانات السؤال الكاملة لعرض الإجابة الصحيحة
     context.user_data["current_question_data"] = {
-        "option_a": question_data.get('option_a', ''),
-        "option_b": question_data.get('option_b', ''),
-        "option_c": question_data.get('option_c', ''),
-        "option_d": question_data.get('option_d', '')
+        "option_a": option_a,
+        "option_b": option_b,
+        "option_c": option_c,
+        "option_d": option_d
     }
     
     reply_markup = InlineKeyboardMarkup(keyboard)
