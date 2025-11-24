@@ -823,10 +823,14 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # إنشاء أزرار الخيارات - بدون ترجمة
     keyboard = [
-        [InlineKeyboardButton("A", callback_data="answer_A")],
-        [InlineKeyboardButton("B", callback_data="answer_B")],
-        [InlineKeyboardButton("C", callback_data="answer_C")],
-        [InlineKeyboardButton("D", callback_data="answer_D")],
+        [
+            InlineKeyboardButton("A", callback_data="answer_A"),
+            InlineKeyboardButton("B", callback_data="answer_B"),
+        ],
+        [
+            InlineKeyboardButton("C", callback_data="answer_C"),
+            InlineKeyboardButton("D", callback_data="answer_D"),
+        ],
         [InlineKeyboardButton("🔚 End Session / إنهاء الجلسة", callback_data="end_session")]
     ]
     
