@@ -19,8 +19,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Increase verbosity for PTB internals when debugging Cloud Run behavior
-logging.getLogger("telegram").setLevel(logging.DEBUG)
-logging.getLogger("telegram.ext").setLevel(logging.DEBUG)
+logging.getLogger("telegram").setLevel(logging.INFO)  # ← خففنا من DEBUG إلى INFO
+logging.getLogger("telegram.ext").setLevel(logging.INFO)  # ← خففنا من DEBUG إلى INFO
 logging.getLogger("httpx").setLevel(logging.INFO)
 
 from flask import Flask, request, jsonify
@@ -180,21 +180,24 @@ def save_user_answer(telegram_id: int, question_id: int, selected_answer: str, c
 
 @time_it_sync
 def get_user_stats(telegram_id: int):
-    """جلب إحصائيات المستخدم"""
+    """جلب إحصائيات المستخدم - محسّن للسرعة باستخدام count"""
     try:
-        response = supabase.table('user_answers_bot').select('is_correct', count='exact').eq('user_id', telegram_id).execute()
-        if response.data:
-            total_answers = len(response.data)
-            correct_answers = sum(1 for answer in response.data if answer['is_correct'])
-            accuracy = (correct_answers / total_answers) * 100 if total_answers > 0 else 0
-            logger.info("User %s stats: %s total, %s correct, %s%% accuracy", telegram_id, total_answers, correct_answers, round(accuracy, 1))
-            return {
-                'total_answers': total_answers,
-                'correct_answers': correct_answers,
-                'accuracy': round(accuracy, 1)
-            }
-        logger.info("User %s has no stats yet", telegram_id)
-        return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
+        # ✅ جلب العدد الكلي باستخدام count (سريع حتى مع 50 ألف سؤال!)
+        total_resp = supabase.table('user_answers_bot').select('id', count='exact').eq('user_id', telegram_id).limit(1).execute()
+        total_answers = total_resp.count or 0
+        
+        # ✅ جلب عدد الإجابات الصحيحة فقط باستخدام count
+        correct_resp = supabase.table('user_answers_bot').select('id', count='exact').eq('user_id', telegram_id).eq('is_correct', True).limit(1).execute()
+        correct_answers = correct_resp.count or 0
+        
+        accuracy = (correct_answers / total_answers) * 100 if total_answers > 0 else 0
+        logger.info("User %s stats: %s total, %s correct, %s%% accuracy", telegram_id, total_answers, correct_answers, round(accuracy, 1))
+        
+        return {
+            'total_answers': total_answers,
+            'correct_answers': correct_answers,
+            'accuracy': round(accuracy, 1)
+        }
     except Exception as e:
         logger.warning("Could not fetch user stats for telegram_id %s: %s", telegram_id, e)
         return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}
@@ -246,21 +249,25 @@ def get_total_questions_count():
 def fetch_random_question(telegram_id: int = None, answered_ids: list = None):
     """جلب سؤال عشوائي من قاعدة البيانات باستخدام RPC مع استثناء المجاب عليها."""
     try:
-        if telegram_id and answered_ids is None:
-            answered_ids = get_user_answered_questions(telegram_id)
-        if answered_ids is None:
-            answered_ids = []
-        elif not isinstance(answered_ids, list):
-            answered_ids = list(answered_ids)
-
-        payload = {"excluded_ids": answered_ids or None}
-        response = supabase.rpc("get_random_question", payload).execute()
+        # ✅ استخدام RPC الجديد الأسرع - يستثني المجاب عليها داخل DB
+        if telegram_id:
+            # RPC جديد يستثني المجاب عليها داخلياً بدون إرسال arrays ضخمة
+            response = supabase.rpc("get_random_question_for_user", {"p_user_id": telegram_id}).execute()
+        else:
+            # Fallback للـ RPC القديم (للحالات النادرة بدون user_id)
+            if answered_ids is None:
+                answered_ids = []
+            elif not isinstance(answered_ids, list):
+                answered_ids = list(answered_ids)
+            payload = {"excluded_ids": answered_ids or None}
+            response = supabase.rpc("get_random_question", payload).execute()
+        
         rows = response.data or []
         if isinstance(rows, dict):
             rows = [rows]
 
         if not rows:
-            if telegram_id and answered_ids:
+            if telegram_id:
                 logger.info("User %s has no more questions available via RPC", telegram_id)
             else:
                 logger.warning("No questions found in database for fetch_random_question (RPC).")
@@ -280,18 +287,15 @@ async def _fill_question_buffer(context: ContextTypes.DEFAULT_TYPE, user_id: int
     excluded_store = context.user_data.setdefault(PREFETCH_EXCLUDED_KEY, set())
 
     while len(buffer) < MAX_PREFETCH_QUESTIONS:
-        excluded_ids = set(excluded_store)
-        excluded_ids.update(
-            question.get('id')
-            for question in buffer
-            if isinstance(question, dict) and question.get('id') is not None
-        )
-
+        # ✅ الآن أبسط بكثير - الـ RPC يستثني المجاب عليها تلقائياً
+        # نحتاج فقط نتأكد أننا ما نكرر الأسئلة في الـ buffer نفسه
+        buffer_ids = {q.get('id') for q in buffer if isinstance(q, dict) and q.get('id')}
+        
+        # لو السؤال موجود في البافر، نعيد المحاولة
         try:
             question = await asyncio.to_thread(
                 fetch_random_question,
-                user_id,
-                answered_ids=list(excluded_ids) if excluded_ids else None,
+                user_id  # ✅ فقط user_id - الباقي يصير داخل DB
             )
         except asyncio.CancelledError:
             raise
@@ -301,9 +305,13 @@ async def _fill_question_buffer(context: ContextTypes.DEFAULT_TYPE, user_id: int
 
         if not question:
             break
+        
+        # تأكد أن السؤال مو موجود في البافر (احتمال نادر لكن ممكن مع random)
+        question_id = question.get('id')
+        if question_id in buffer_ids or question_id in excluded_store:
+            continue  # اطلب سؤال آخر
 
         buffer.append(question)
-        question_id = question.get('id')
         if question_id is not None:
             excluded_store.add(question_id)
 
@@ -562,26 +570,30 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_questions = get_total_questions_count()
         return stats, answered_questions, total_questions
 
-    # اجلب إجابات المستخدم مرة واحدة ثم احسب كل شيء محليًا لتقليل عدد الطلبات
+    # ✅ نستخدم count بدل جلب كل الصفوف (أسرع بكثير!)
     def _fetch_answers_and_compute():
-        rows = []
         try:
-            resp = supabase.table('user_answers_bot').select('question_id,is_correct').eq('user_id', user.id).execute()
-            rows = resp.data or []
+            # ✅ العدد الكلي
+            total_resp = supabase.table('user_answers_bot').select('id', count='exact').eq('user_id', user.id).limit(1).execute()
+            total = total_resp.count or 0
+            
+            # ✅ عدد الصحيحة
+            correct_resp = supabase.table('user_answers_bot').select('id', count='exact').eq('user_id', user.id).eq('is_correct', True).limit(1).execute()
+            correct = correct_resp.count or 0
+            
+            accuracy = round(((correct / total) * 100) if total > 0 else 0, 1)
+            stats_loc = {'total_answers': total, 'correct_answers': correct, 'accuracy': accuracy}
+            total_questions_loc = get_total_questions_count()
+            return stats_loc, total_questions_loc
         except Exception as e:
-            logger.warning("Stats fetch failed; proceeding with empty rows: %s", e)
-        total = len(rows)
-        correct = sum(1 for r in rows if r.get('is_correct'))
-        accuracy = round(((correct / total) * 100) if total > 0 else 0, 1)
-        stats_loc = {'total_answers': total, 'correct_answers': correct, 'accuracy': accuracy}
-        answered_ids_loc = [r['question_id'] for r in rows if 'question_id' in r]
-        total_questions_loc = get_total_questions_count()
-        return stats_loc, answered_ids_loc, total_questions_loc
+            logger.warning("Stats fetch failed: %s", e)
+            # Fallback
+            return {'total_answers': 0, 'correct_answers': 0, 'accuracy': 0}, get_total_questions_count()
 
-    stats, answered_questions, total_questions = await asyncio.to_thread(_fetch_answers_and_compute)
+    stats, total_questions = await asyncio.to_thread(_fetch_answers_and_compute)
 
     # جلب عدد الأسئلة الكلي والمتبقية
-    remaining_questions = total_questions - len(answered_questions)
+    remaining_questions = total_questions - stats['total_answers']
     
     stats_message = (
         f"📊 **Your Statistics / إحصائياتك**\n\n"
@@ -716,20 +728,28 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     loop_local = asyncio.get_running_loop()
 
-    # نحسب عدد الأسئلة وإجابات اليوزر إما أول مرة أو إذا الجلسة قديمة
+    # ✅ تحسين: نجيب عدد الأسئلة المجابة بدون تحميل كل الـ IDs (أسرع بكثير!)
     if ("session_initialized" not in context.user_data) or is_session_stale(context.user_data):
         # جلسة جديدة أو قديمة تحتاج إعادة مزامنة من قاعدة البيانات
         total_future = loop_local.run_in_executor(None, get_total_questions_count)
-        answered_future = loop_local.run_in_executor(None, get_user_answered_questions, user.id)
+        
+        # ✅ بدل ما نجيب كل الـ IDs، نجيب العدد فقط (للإحصائيات)
+        def get_answered_count():
+            try:
+                resp = supabase.table('user_answers_bot').select('id', count='exact').eq('user_id', user.id).limit(1).execute()
+                return resp.count or 0  # ✅ نعتمد على count فقط
+            except Exception as e:
+                logger.warning("Could not get answered count for user %s: %s", user.id, e)
+                return 0
+        
+        answered_count_future = loop_local.run_in_executor(None, get_answered_count)
 
         total_questions = await total_future
-        answered_questions = await answered_future
-
-        answered_ids_set = set(answered_questions)
+        answered_count = await answered_count_future
 
         context.user_data["total_questions"] = total_questions
-        context.user_data["answered_ids"] = answered_ids_set
-        context.user_data["remaining_questions"] = total_questions - len(answered_ids_set)
+        context.user_data["answered_count"] = answered_count
+        context.user_data["remaining_questions"] = total_questions - answered_count
         context.user_data["session_initialized"] = True
 
         # نخزن وقت آخر مزامنة للجلسة
@@ -745,33 +765,29 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # الجلسة لا تزال حديثة → نستخدم الكاش من user_data
         total_questions = context.user_data.get("total_questions", 0)
-        answered_ids_set = context.user_data.get("answered_ids", set())
-        answered_questions = list(answered_ids_set)
+        answered_count = context.user_data.get("answered_count", 0)
 
     remaining_questions = context.user_data.get(
         "remaining_questions",
-        total_questions - len(answered_questions)
+        total_questions - answered_count
     )
     
+    # ✅ نظام الـ buffer أصبح أبسط - الـ RPC الجديد يستثني المجاب عليها تلقائياً
     question_buffer = context.user_data.setdefault(QUESTION_BUFFER_KEY, [])
-    recently_answered = context.user_data.get(RECENTLY_ANSWERED_KEY, [])
-    base_fetch_excluded = set(answered_ids_set)
-    base_fetch_excluded.update(
-        qid for qid in recently_answered if isinstance(qid, int)
-    )
     question_data = None
 
     if question_buffer:
         question_data = question_buffer.pop(0)
     else:
+        # ✅ الآن fetch_random_question أسرع بكثير - لا يحتاج excluded_ids!
         question_data = await asyncio.to_thread(
             fetch_random_question,
-            user.id,
-            answered_ids=list(base_fetch_excluded) if base_fetch_excluded else None,
+            user.id  # فقط user_id، الباقي يصير داخل DB
         )
+    
     if not question_data:
         # التحقق من سبب عدم وجود أسئلة
-        if answered_questions and len(answered_questions) > 0:
+        if answered_count > 0:
             await query.edit_message_text(
                 "🎉 مبروك! لقد أجبت على جميع الأسئلة المتاحة!\n"
                 "Congratulations! You've answered all available questions!\n\n"
@@ -787,8 +803,9 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    # ✅ ملء الـ buffer في الخلفية (أسرع بكثير الآن!)
     question_id = question_data.get('id')
-    base_excluded_ids = set(base_fetch_excluded)
+    base_excluded_ids = set()
     if isinstance(question_id, int):
         base_excluded_ids.add(question_id)
     base_excluded_ids.update(
@@ -888,16 +905,15 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # حفظ إجابة المستخدم (Fire-and-forget لتقليل زمن الاستجابة)
     asyncio.create_task(asyncio.to_thread(save_user_answer, user.id, question_id, selected_answer, correct_answer, is_correct))
     
-    # تحديث الأسئلة المجابة والمتبقي في الجلسة الحالية
+    # ✅ تحديث العدد فقط (أسرع من تتبع كل الـ IDs)
     try:
-        answered_ids_set = context.user_data.setdefault("answered_ids", set())
-        if isinstance(question_id, int) and question_id not in answered_ids_set:
-            answered_ids_set.add(question_id)
-            if "remaining_questions" in context.user_data:
-                context.user_data["remaining_questions"] = max(
-                    0,
-                    context.user_data["remaining_questions"] - 1,
-                )
+        if "answered_count" in context.user_data:
+            context.user_data["answered_count"] += 1
+        if "remaining_questions" in context.user_data:
+            context.user_data["remaining_questions"] = max(
+                0,
+                context.user_data["remaining_questions"] - 1,
+            )
     except Exception as e:
         logger.warning("Could not update session answered/remaining cache: %s", e)
 
